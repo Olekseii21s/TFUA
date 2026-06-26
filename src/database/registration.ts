@@ -1,0 +1,1 @@
+export const registrationState = new Map<number, any>();
