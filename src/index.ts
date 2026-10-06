@@ -31,6 +31,12 @@ import {
     deleteUserGames
 } from "./database/userGames";
 
+import {
+    saveSearchPreferences,
+    getSearchPreferences,
+    deleteSearchPreferences
+} from "./database/searchPreferences";
+
 
 import {
     createRequest,
@@ -174,6 +180,28 @@ function buildRankKeyboard(game: string) {
     rows.push(["🔙 Назад"]);
 
     return Markup.keyboard(rows).resize();
+}
+
+function buildSearchRankKeyboard(game: string) {
+    const ranks = GAME_RANKS[game] || [];
+    const rows: string[][] = [];
+    for (let i = 0; i < ranks.length; i += 2) rows.push(ranks.slice(i, i + 2));
+    rows.push(["Будь-який ранг"]);
+    return Markup.keyboard(rows).resize();
+}
+
+function parseRankFilters(value: unknown): Record<string, string> {
+    if (typeof value !== "string" || !value) return {};
+    try { return JSON.parse(value); } catch { return {}; }
+}
+
+function matchesSearchGames(user: any, games: string[], rankFilters: Record<string, string>) {
+    const userGames: any[] = getUserGames(user.telegram_id) as any[];
+    return games.some((game) => {
+        const requiredRank = rankFilters[game];
+        if (!requiredRank) return String(user.games || "").split(",").map((g: string) => g.trim()).includes(game);
+        return userGames.some((entry) => entry.game === game && entry.rank === requiredRank);
+    });
 }
 
 bot.hears("👤 Моя анкета", async (ctx) => {
@@ -484,6 +512,10 @@ bot.action("delete_profile", async (ctx) => {
         telegramId
     );
 
+    deleteSearchPreferences(
+        telegramId
+    );
+
     registrationState.delete(
         telegramId
     );
@@ -653,53 +685,145 @@ bot.hears(
 
 
 
-bot.hears(
-    "🔥 Шукати тімейтів",
-    async (ctx) => {
 
-        const profile: any =
-            getUser(ctx.from.id);
 
-        if (!profile) {
 
-            return ctx.reply(
-                "❌ Спочатку створіть анкету"
-            );
 
-        }
+bot.hears("🔥 Шукати тімейтів", async (ctx) => {
+    const telegramId = ctx.from.id;
+    const profile: any = getUser(telegramId);
 
-        registrationState.set(
-            ctx.from.id,
-            {
-                searchStep: "games",
-                selectedGames: [],
-                filters: {}
-            }
-        );
+    if (!profile) {
+        return ctx.reply("❌ Спочатку створіть анкету через кнопку 👤 Моя анкета");
+    }
 
-        await ctx.reply(
-            "🎮 Оберіть гру:",
+    const saved: any = getSearchPreferences(telegramId);
+
+    if (!saved) {
+        registrationState.set(telegramId, {
+            searchStep: "games",
+            selectedGames: [],
+            rankFilters: {},
+            filters: {}
+        });
+
+        return ctx.reply(
+            "🎮 Оберіть одну або декілька ігор для пошуку:",
             Markup.keyboard([
-                ["CS2"],
-                ["Valorant"],
-                ["League of Legends"],
-                ["Dota 2"],
-                ["Rainbow Six Siege"],
-                ["Apex Legends"],
-                ["Fortnite"],
-                ["Overwatch 2"],
-                ["Dead by Daylight"],
-                ["PUBG"],
-                ["Rocket League"],
-                ["Marvel Rivals"],
+                ["CS2", "Valorant"],
+                ["League of Legends", "Dota 2"],
+                ["Rainbow Six Siege", "Apex Legends"],
+                ["Fortnite", "Overwatch 2"],
+                ["Dead by Daylight", "PUBG"],
+                ["Rocket League", "Marvel Rivals"],
+                ["World of Tanks", "War Thunder"],
+                ["Rust", "Escape from Tarkov"],
+                ["Minecraft"],
                 ["✅ Готово"],
                 ["🔙 Назад"]
             ]).resize()
         );
-
     }
-);
 
+    const selectedGames = String(saved.games || "")
+        .split(",")
+        .map((game: string) => game.trim())
+        .filter(Boolean);
+    const rankFilters = parseRankFilters(saved.rank_filters);
+
+    const filters = {
+        gender: saved.gender,
+        minAge: Number(saved.min_age),
+        maxAge: Number(saved.max_age)
+    };
+
+    const profiles: any[] = getAllUsers()
+        .filter((user: any) => {
+            if (user.telegram_id === telegramId) return false;
+
+            const hasGame = matchesSearchGames(user, selectedGames, rankFilters);
+
+            if (!hasGame) return false;
+
+            if (
+                filters.gender !== "🌍 Будь-яка" &&
+                user.gender !== filters.gender
+            ) {
+                return false;
+            }
+
+            const age = Number(user.age);
+
+            return age >= filters.minAge && age <= filters.maxAge;
+        })
+        .sort(() => Math.random() - 0.5);
+
+    if (!profiles.length) {
+        return ctx.reply(
+            "😔 Нікого не знайдено за збереженими критеріями.",
+            Markup.keyboard([
+                ["✏️ Редагувати пошук"],
+                ["🔥 Шукати тімейтів"],
+                ["👤 Моя анкета"]
+            ]).resize()
+        );
+    }
+
+    registrationState.set(telegramId, {
+        searchResults: profiles,
+        currentIndex: 0
+    });
+
+    const profileToShow = profiles[0];
+    const userGames: any[] = getUserGames(profileToShow.telegram_id) as any[];
+    const gamesText = userGames.length
+        ? userGames.map((g: any) => `🎮 ${g.game} — ${g.rank}`).join("\n")
+        : "🎮 Ігри не вказані";
+
+    return ctx.reply(
+        `👤 ${profileToShow.name}\n\n${gamesText}\n🎂 Вік: ${profileToShow.age}\n👤 Стать: ${profileToShow.gender}\n\n📝 ${profileToShow.about}`,
+        Markup.inlineKeyboard([
+            [Markup.button.callback("🎮 Запросити в гру", `like_${profileToShow.telegram_id}`)],
+            [Markup.button.callback("⚠️ Поскаржитись", `report_user_${profileToShow.telegram_id}`)],
+            [Markup.button.callback("⏭ Пропустити", "skip")]
+        ])
+    );
+});
+
+bot.hears("✏️ Редагувати пошук", async (ctx) => {
+    const telegramId = ctx.from.id;
+    const saved: any = getSearchPreferences(telegramId);
+
+    if (!saved) {
+        return ctx.reply(
+            "❌ Збережених критеріїв пошуку ще немає. Натисніть 🔥 Шукати тімейтів, щоб налаштувати пошук."
+        );
+    }
+
+    registrationState.set(telegramId, {
+        searchStep: "games",
+        selectedGames: [],
+        rankFilters: {},
+        filters: {}
+    });
+
+    return ctx.reply(
+        `✏️ Редагування пошуку\n\n🎮 Ігри: ${saved.games}\n👤 Стать: ${saved.gender}\n🎂 Вік: ${saved.min_age}-${saved.max_age}\n\n🎮 Оберіть ігри заново:`,
+        Markup.keyboard([
+            ["CS2", "Valorant"],
+            ["League of Legends", "Dota 2"],
+            ["Rainbow Six Siege", "Apex Legends"],
+            ["Fortnite", "Overwatch 2"],
+            ["Dead by Daylight", "PUBG"],
+            ["Rocket League", "Marvel Rivals"],
+            ["World of Tanks", "War Thunder"],
+            ["Rust", "Escape from Tarkov"],
+            ["Minecraft"],
+            ["✅ Готово"],
+            ["🔙 Назад"]
+        ]).resize()
+    );
+});
 
     bot.on("text", async (ctx) => {
 
@@ -911,7 +1035,6 @@ ${ctx.message.text}`
 👤 ${profile.name}
 
 🎮 Ігри: ${profile.games}
-🏆 Ранг: ${profile.ranks}
 🎂 Вік: ${profile.age}
 👤 Стать: ${profile.gender}
 
@@ -1043,18 +1166,38 @@ ${ctx.message.text}`
                 telegramId,
                 {
                     ...state,
-                    searchStep: "gender"
+                    searchStep: "rank",
+                    currentRankGameIndex: 0,
+                    rankFilters: {}
                 }
             );
 
             return ctx.reply(
-                "👤 Оберіть стать:",
-                Markup.keyboard([
-                    ["👨 Чоловік"],
-                    ["👩 Жінка"],
-                    ["🌍 Будь-яка"]
-                ]).resize()
+                `🏆 Оберіть бажаний ранг для ${state.selectedGames[0]} або будь-який ранг:`,
+                buildSearchRankKeyboard(state.selectedGames[0])
             );
+        }
+
+        if (state?.searchStep === "rank") {
+            const game = state.selectedGames[state.currentRankGameIndex];
+            const ranks = GAME_RANKS[game];
+            if (ctx.message.text !== "Будь-який ранг" && !ranks?.includes(ctx.message.text)) {
+                return ctx.reply(`Оберіть ранг зі списку для ${game}:`, buildSearchRankKeyboard(game));
+            }
+            if (ctx.message.text !== "Будь-який ранг") state.rankFilters[game] = ctx.message.text;
+            state.currentRankGameIndex++;
+            while (state.currentRankGameIndex < state.selectedGames.length && !GAME_RANKS[state.selectedGames[state.currentRankGameIndex]]) {
+                state.currentRankGameIndex++;
+            }
+            if (state.currentRankGameIndex < state.selectedGames.length) {
+                const nextGame = state.selectedGames[state.currentRankGameIndex];
+                registrationState.set(telegramId, state);
+                return ctx.reply(`🏆 Оберіть бажаний ранг для ${nextGame} або будь-який ранг:`, buildSearchRankKeyboard(nextGame));
+            }
+            registrationState.set(telegramId, { ...state, searchStep: "gender" });
+            return ctx.reply("👤 Оберіть стать:", Markup.keyboard([
+                ["👨 Чоловік"], ["👩 Жінка"], ["🌍 Будь-яка"]
+            ]).resize());
         }
 
 
@@ -1154,6 +1297,15 @@ ${ctx.message.text}`
                 maxAge
             };
 
+            saveSearchPreferences(
+                telegramId,
+                state.selectedGames,
+                filters.gender,
+                filters.minAge,
+                filters.maxAge,
+                state.rankFilters || {}
+            );
+
             const profiles: any[] =
                 getAllUsers()
                     .filter((user: any) => {
@@ -1165,11 +1317,7 @@ ${ctx.message.text}`
                             return false;
                         }
 
-                        const hasGame =
-                            state.selectedGames.some(
-                                (game: string) =>
-                                    user.games.includes(game)
-                            );
+                        const hasGame = matchesSearchGames(user, state.selectedGames, state.rankFilters || {});
 
                         if (!hasGame) {
                             return false;
@@ -1461,7 +1609,6 @@ ${gamesText}
                 ctx.from.username || "",
                 state.name,
                 state.games.join(", "),
-                "",
                 state.age,
                 state.gender,
                 ctx.message.text
