@@ -1,5 +1,7 @@
+// Має бути першим імпортом: .env потрібен ще до підключення бази (DB_PATH).
+import "dotenv/config";
+
 import { Telegraf, Markup } from "telegraf";
-import dotenv from "dotenv";
 
 import { deleteUser } from "./database/deleteUser";
 
@@ -22,7 +24,8 @@ import {
     saveUser,
     getUser,
     getAllUsers,
-    updateField
+    updateField,
+    UserRecord
 } from "./database/users";
 
 import {
@@ -41,7 +44,6 @@ import {
 import {
     createRequest,
     getRequests,
-    getRequestBetween,
     getPendingRequest,
     updateRequestStatus
 } from "./database/requests";
@@ -56,13 +58,126 @@ import {
 
 import { registrationState } from "./database/registration";
 
-dotenv.config();
+function requireEnv(name: string): string {
+    const value = process.env[name]?.trim();
 
-const bot = new Telegraf(process.env.BOT_TOKEN!);
+    if (!value) {
+        console.error(`❌ Не задано змінну ${name} у файлі .env (див. .env.example)`);
+        process.exit(1);
+    }
 
-const CHANNEL_ID = -1001234567890;
+    return value;
+}
 
-const ADMIN_ID = 123456789;
+const BOT_TOKEN = requireEnv("BOT_TOKEN");
+
+const ADMIN_ID = Number(requireEnv("ADMIN_ID"));
+
+const channelIdRaw = requireEnv("CHANNEL_ID");
+
+// Числовий ID (-100...) або @username каналу.
+const CHANNEL_ID: number | string =
+    /^-?\d+$/.test(channelIdRaw) ? Number(channelIdRaw) : channelIdRaw;
+
+if (!Number.isInteger(ADMIN_ID)) {
+    console.error("❌ ADMIN_ID у .env має бути числом");
+    process.exit(1);
+}
+
+const bot = new Telegraf(BOT_TOKEN);
+
+const BANNED_TEXT = "⛔ Ваш акаунт заблоковано адміністрацією.";
+
+// Бан перевіряється для БУДЬ-якої дії: повідомлень, кнопок меню та inline-кнопок.
+bot.use(async (ctx, next) => {
+    const userId = ctx.from?.id;
+
+    if (userId && userId !== ADMIN_ID && isBanned(userId)) {
+        if (ctx.callbackQuery) {
+            await ctx.answerCbQuery(BANNED_TEXT);
+        } else if (ctx.chat?.type === "private") {
+            await ctx.reply(BANNED_TEXT);
+        }
+
+        return;
+    }
+
+    return next();
+});
+
+// ===== Валідація введених даних =====
+
+const NAME_MAX_LENGTH = 32;
+const ABOUT_MAX_LENGTH = 500;
+const CUSTOM_RANK_MAX_LENGTH = 30;
+const REPORT_MAX_LENGTH = 1000;
+
+const MIN_AGE = 14;
+const MAX_AGE = 99;
+
+const GENDERS = ["👨 Чоловік", "👩 Жінка"];
+const ANY_GENDER = "🌍 Будь-яка";
+
+function parseAge(text: string): number | null {
+    const age = Number(text.trim());
+
+    if (!Number.isInteger(age) || age < MIN_AGE || age > MAX_AGE) {
+        return null;
+    }
+
+    return age;
+}
+
+const AGE_ERROR = `❌ Вік має бути цілим числом від ${MIN_AGE} до ${MAX_AGE}`;
+
+function validateText(text: string, maxLength: number, label: string): string | null {
+    const value = text.trim();
+
+    if (!value) {
+        return `❌ ${label} не може бути порожнім`;
+    }
+
+    if (value.length > maxLength) {
+        return `❌ ${label}: максимум ${maxLength} символів (зараз ${value.length})`;
+    }
+
+    return null;
+}
+
+function formatGames(telegramId: number): string {
+    const userGames: any[] = getUserGames(telegramId) as any[];
+
+    return userGames.length
+        ? userGames.map((g: any) => `🎮 ${g.game} — ${g.rank}`).join("\n")
+        : "🎮 Ігри не вказані";
+}
+
+/** Текст анкети. Username показуємо лише після взаємної згоди (матчу). */
+function formatProfile(profile: UserRecord, title?: string): string {
+    const header = title ? `${title}\n\n` : "";
+
+    return `${header}👤 ${profile.name}
+
+${formatGames(profile.telegram_id)}
+🎂 Вік: ${profile.age}
+👤 Стать: ${profile.gender}
+
+📝 ${profile.about}`;
+}
+
+function clearStateKey(telegramId: number, key: string) {
+    const state = registrationState.get(telegramId);
+
+    if (!state) return;
+
+    const { [key]: _removed, ...rest } = state;
+
+    if (Object.keys(rest).length) {
+        registrationState.set(telegramId, rest);
+    } else {
+        registrationState.delete(telegramId);
+    }
+}
 
 const GAMES = [
     "CS2",
@@ -202,6 +317,38 @@ function matchesSearchGames(user: any, games: string[], rankFilters: Record<stri
         if (!requiredRank) return String(user.games || "").split(",").map((g: string) => g.trim()).includes(game);
         return userGames.some((entry) => entry.game === game && entry.rank === requiredRank);
     });
+}
+
+interface SearchFilters {
+    gender: string;
+    minAge: number;
+    maxAge: number;
+}
+
+function findProfiles(
+    telegramId: number,
+    games: string[],
+    rankFilters: Record<string, string>,
+    filters: SearchFilters
+): UserRecord[] {
+    return getAllUsers()
+        .filter((user) => {
+            if (user.telegram_id === telegramId) return false;
+
+            // Заблоковані користувачі не показуються в пошуку.
+            if (isBanned(user.telegram_id)) return false;
+
+            if (!matchesSearchGames(user, games, rankFilters)) return false;
+
+            if (filters.gender !== ANY_GENDER && user.gender !== filters.gender) {
+                return false;
+            }
+
+            const age = Number(user.age);
+
+            return age >= filters.minAge && age <= filters.maxAge;
+        })
+        .sort(() => Math.random() - 0.5);
 }
 
 bot.hears("👤 Моя анкета", async (ctx) => {
@@ -662,8 +809,6 @@ bot.hears("🔙 Назад", async (ctx) => {
 
 });
 
-console.log(getAllUsers());
-
 
 bot.hears(
     "🐞 Повідомити про проблему",
@@ -737,26 +882,7 @@ bot.hears("🔥 Шукати тімейтів", async (ctx) => {
         maxAge: Number(saved.max_age)
     };
 
-    const profiles: any[] = getAllUsers()
-        .filter((user: any) => {
-            if (user.telegram_id === telegramId) return false;
-
-            const hasGame = matchesSearchGames(user, selectedGames, rankFilters);
-
-            if (!hasGame) return false;
-
-            if (
-                filters.gender !== "🌍 Будь-яка" &&
-                user.gender !== filters.gender
-            ) {
-                return false;
-            }
-
-            const age = Number(user.age);
-
-            return age >= filters.minAge && age <= filters.maxAge;
-        })
-        .sort(() => Math.random() - 0.5);
+    const profiles = findProfiles(telegramId, selectedGames, rankFilters, filters);
 
     if (!profiles.length) {
         return ctx.reply(
@@ -828,15 +954,6 @@ bot.hears("✏️ Редагувати пошук", async (ctx) => {
     bot.on("text", async (ctx) => {
 
 
-        if (isBanned(ctx.from.id)) {
-
-            return ctx.reply(
-                "⛔ Ваш акаунт заблоковано адміністрацією."
-            );
-
-        }
-
-
         if (
             ctx.message.text === "🔥 Шукати тімейтів" ||
             ctx.message.text === "👤 Моя анкета"
@@ -844,24 +961,26 @@ bot.hears("✏️ Редагувати пошук", async (ctx) => {
             return;
         }
 
-        console.log("TEXT:", ctx.message.text);
-
         const telegramId = ctx.from.id;
-
-
-
-
 
         const state = registrationState.get(telegramId);
 
-
-
-
         if (state?.reportBug) {
 
-            await bot.telegram.sendMessage(
-                CHANNEL_ID,
-                `🐞 Нова проблема
+            const error = validateText(ctx.message.text, REPORT_MAX_LENGTH, "Повідомлення");
+
+            if (error) {
+                return ctx.reply(error);
+            }
+
+            registrationState.delete(
+                telegramId
+            );
+
+            try {
+                await bot.telegram.sendMessage(
+                    CHANNEL_ID,
+                    `🐞 Нова проблема
 
 👤 ${ctx.from.first_name}
 🆔 ${ctx.from.id}
@@ -869,12 +988,15 @@ bot.hears("✏️ Редагувати пошук", async (ctx) => {
 
 ━━━━━━━━━━
 
-${ctx.message.text}`
-            );
+${ctx.message.text.trim()}`
+                );
+            } catch (err) {
+                console.error("Не вдалося надіслати повідомлення про проблему в канал:", err);
 
-            registrationState.delete(
-                telegramId
-            );
+                return ctx.reply(
+                    "⚠️ Не вдалося надіслати повідомлення. Спробуйте пізніше."
+                );
+            }
 
             return ctx.reply(
                 "✅ Дякуємо! Ваше повідомлення відправлено адміністратору."
@@ -888,12 +1010,15 @@ ${ctx.message.text}`
             )
         ) {
 
-            const users: any[] =
-                getAllUsers() as any[];
+            broadcastState.delete(
+                telegramId
+            );
 
-            for (
-                const user of users
-                ) {
+            const users = getAllUsers();
+
+            let delivered = 0;
+
+            for (const user of users) {
 
                 try {
 
@@ -904,65 +1029,80 @@ ${ctx.message.text}`
 ${ctx.message.text}`
                     );
 
-                } catch {}
+                    delivered++;
+
+                } catch {
+                    // Користувач заблокував бота або видалив акаунт.
+                }
+
+                // Telegram обмежує ~30 повідомлень/сек — не перевищуємо ліміт.
+                await new Promise((resolve) => setTimeout(resolve, 50));
 
             }
 
-            broadcastState.delete(
-                telegramId
-            );
-
             return ctx.reply(
-                `✅ Розсилку відправлено ${users.length} користувачам`
+                `✅ Розсилку доставлено ${delivered} з ${users.length} користувачів`
             );
 
         }
 
         if (state?.reportPlayer) {
 
-            const reportedUser: any =
-                getUser(state.reportPlayer);
+            const reportedId: number = state.reportPlayer;
 
-            const reportedGames: any[] =
-                getUserGames(state.reportPlayer) as any[];
+            const error = validateText(ctx.message.text, REPORT_MAX_LENGTH, "Причина скарги");
 
-            const gamesText =
-                reportedGames.length
-                    ? reportedGames
-                        .map(
-                            (g: any) =>
-                                `🎮 ${g.game} — ${g.rank}`
-                        )
-                        .join("\n")
-                    : "🎮 Ігри не вказані";
+            if (error) {
+                return ctx.reply(error);
+            }
 
-            await bot.telegram.sendMessage(
-                CHANNEL_ID,
-                `🚨 Нова скарга
+            // Стан скарги очищаємо одразу, щоб наступні повідомлення не йшли як нові скарги.
+            clearStateKey(telegramId, "reportPlayer");
+
+            const reportedUser = getUser(reportedId);
+
+            if (!reportedUser) {
+                return ctx.reply("❌ Цю анкету вже видалено.");
+            }
+
+            try {
+                await bot.telegram.sendMessage(
+                    CHANNEL_ID,
+                    `🚨 Нова скарга
 
 👤 Скаржник:
 ${ctx.from.first_name}
-
 🆔 ${ctx.from.id}
 
 ━━━━━━━━━━
 
 🎮 Анкета:
+🆔 ${reportedUser.telegram_id}
 
-👤 ${reportedUser?.name}
-🆔 ${reportedUser?.telegram_id}
-
-${gamesText}
-🎂 Вік: ${reportedUser?.age}
-👤 Стать: ${reportedUser?.gender}
-
-📝 ${reportedUser?.about}
+${formatProfile(reportedUser)}
 
 ━━━━━━━━━━
 
 📝 Причина:
 
-${ctx.message.text}`
+${ctx.message.text.trim()}`
+                );
+            } catch (err) {
+                console.error("Не вдалося надіслати скаргу в канал:", err);
+
+                return ctx.reply(
+                    "⚠️ Не вдалося надіслати скаргу. Спробуйте пізніше."
+                );
+            }
+
+            const reports = reportedProfiles.get(telegramId) || [];
+
+            reports.push(reportedId);
+
+            reportedProfiles.set(telegramId, reports);
+
+            return ctx.reply(
+                "✅ Скаргу надіслано. Дякуємо, адміністратор її перегляне."
             );
         }
 
@@ -976,50 +1116,36 @@ ${ctx.message.text}`
         ) {
 
 
-            if (
-                state.editField === "gender"
-            ) {
+            let value = ctx.message.text.trim();
 
-                if (
-                    ctx.message.text !== "👨 Чоловік" &&
-                    ctx.message.text !== "👩 Жінка"
-                ) {
-
-                    return ctx.reply(
-                        "❌ Оберіть стать кнопкою"
-                    );
-
-                }
-
+            if (state.editField === "gender" && !GENDERS.includes(value)) {
+                return ctx.reply("❌ Оберіть стать кнопкою");
             }
 
+            if (state.editField === "age") {
+                const age = parseAge(value);
 
-
-            if (
-                state.editField === "age"
-            ) {
-
-                const age =
-                    Number(ctx.message.text);
-
-                if (
-                    isNaN(age) ||
-                    age < 14 ||
-                    age > 99
-                ) {
-
-                    return ctx.reply(
-                        "❌ Вік має бути від 14 до 99 років"
-                    );
-
+                if (age === null) {
+                    return ctx.reply(AGE_ERROR);
                 }
 
+                value = String(age);
+            }
+
+            if (state.editField === "name" || state.editField === "about") {
+                const error = state.editField === "name"
+                    ? validateText(value, NAME_MAX_LENGTH, "Ім'я")
+                    : validateText(value, ABOUT_MAX_LENGTH, "Опис");
+
+                if (error) {
+                    return ctx.reply(error);
+                }
             }
 
             updateField(
                 telegramId,
                 state.editField,
-                ctx.message.text
+                value
             );
 
             registrationState.delete(
@@ -1052,12 +1178,18 @@ ${ctx.message.text}`
 
         if (state.step === "name") {
 
+            const error = validateText(ctx.message.text, NAME_MAX_LENGTH, "Ім'я");
+
+            if (error) {
+                return ctx.reply(error);
+            }
+
             registrationState.set(
                 telegramId,
                 {
                     step: "games",
                     games: [],
-                    name: ctx.message.text
+                    name: ctx.message.text.trim()
                 }
             );
 
@@ -1104,11 +1236,6 @@ ${ctx.message.text}`
                 state
             );
 
-            console.log(
-                "SELECTED:",
-                state.games
-            );
-
             return ctx.reply(
                 `✅ Обрано:\n${state.games.join(", ")}`
             );
@@ -1120,8 +1247,6 @@ ${ctx.message.text}`
             state?.searchStep === "games" &&
             GAMES.includes(ctx.message.text)
         ) {
-
-            console.log("SEARCH GAME:", ctx.message.text);
 
             if (!state.selectedGames) {
                 state.selectedGames = [];
@@ -1203,6 +1328,15 @@ ${ctx.message.text}`
 
         if (state?.searchStep === "gender") {
 
+            if (![...GENDERS, ANY_GENDER].includes(ctx.message.text)) {
+                return ctx.reply(
+                    "❌ Оберіть стать кнопкою",
+                    Markup.keyboard([
+                        ["👨 Чоловік"], ["👩 Жінка"], [ANY_GENDER]
+                    ]).resize()
+                );
+            }
+
             registrationState.set(
                 telegramId,
                 {
@@ -1228,20 +1362,10 @@ ${ctx.message.text}`
 
         if (state?.searchStep === "minAge") {
 
-            const age = Number(
-                ctx.message.text
-            );
+            const age = parseAge(ctx.message.text);
 
-            if (
-                isNaN(age) ||
-                age < 14 ||
-                age > 99
-            ) {
-
-                return ctx.reply(
-                    "❌ Вік має бути від 14 до 99 років"
-                );
-
+            if (age === null) {
+                return ctx.reply(AGE_ERROR);
             }
 
             registrationState.set(
@@ -1265,20 +1389,10 @@ ${ctx.message.text}`
         if (state?.searchStep === "maxAge") {
 
 
-            const maxAge = Number(
-                ctx.message.text
-            );
+            const maxAge = parseAge(ctx.message.text);
 
-            if (
-                isNaN(maxAge) ||
-                maxAge < 14 ||
-                maxAge > 99
-            ) {
-
-                return ctx.reply(
-                    "❌ Вік має бути від 14 до 99 років"
-                );
-
+            if (maxAge === null) {
+                return ctx.reply(AGE_ERROR);
             }
 
             if (
@@ -1306,49 +1420,12 @@ ${ctx.message.text}`
                 state.rankFilters || {}
             );
 
-            const profiles: any[] =
-                getAllUsers()
-                    .filter((user: any) => {
-
-                        if (
-                            user.telegram_id ===
-                            telegramId
-                        ) {
-                            return false;
-                        }
-
-                        const hasGame = matchesSearchGames(user, state.selectedGames, state.rankFilters || {});
-
-                        if (!hasGame) {
-                            return false;
-                        }
-
-                        if (
-                            filters.gender !==
-                            "🌍 Будь-яка"
-                        ) {
-
-                            if (
-                                user.gender !==
-                                filters.gender
-                            ) {
-                                return false;
-                            }
-
-                        }
-
-                        const age =
-                            Number(user.age);
-
-                        return (
-                            age >=
-                            filters.minAge &&
-                            age <=
-                            filters.maxAge
-                        );
-
-                    })
-                    .sort(() => Math.random() - 0.5);
+            const profiles = findProfiles(
+                telegramId,
+                state.selectedGames,
+                state.rankFilters || {},
+                filters
+            );
 
 
 
@@ -1466,10 +1543,16 @@ ${gamesText}
                         buildRankKeyboard(currentGame)
                     );
                 }
+            } else {
+                const error = validateText(ctx.message.text, CUSTOM_RANK_MAX_LENGTH, "Ранг");
+
+                if (error) {
+                    return ctx.reply(error);
+                }
             }
 
             state.gameRanks[currentGame] =
-                ctx.message.text;
+                ctx.message.text.trim();
 
             state.currentGameIndex++;
 
@@ -1547,12 +1630,18 @@ ${gamesText}
 
         if (state.step === "age") {
 
+            const age = parseAge(ctx.message.text);
+
+            if (age === null) {
+                return ctx.reply(AGE_ERROR);
+            }
+
             registrationState.set(
                 telegramId,
                 {
                     ...state,
                     step: "gender",
-                    age: ctx.message.text
+                    age: String(age)
                 }
             );
 
@@ -1566,6 +1655,16 @@ ${gamesText}
         }
 
         if (state.step === "gender") {
+
+            if (!GENDERS.includes(ctx.message.text)) {
+                return ctx.reply(
+                    "❌ Оберіть стать кнопкою",
+                    Markup.keyboard([
+                        ["👨 Чоловік"],
+                        ["👩 Жінка"]
+                    ]).resize()
+                );
+            }
 
             registrationState.set(
                 telegramId,
@@ -1583,7 +1682,11 @@ ${gamesText}
 
         if (state.step === "about") {
 
+            const aboutError = validateText(ctx.message.text, ABOUT_MAX_LENGTH, "Опис");
 
+            if (aboutError) {
+                return ctx.reply(aboutError);
+            }
 
             deleteUserGames(
                 telegramId
@@ -1611,7 +1714,7 @@ ${gamesText}
                 state.games.join(", "),
                 state.age,
                 state.gender,
-                ctx.message.text
+                ctx.message.text.trim()
             );
 
 
@@ -1634,7 +1737,53 @@ ${gamesText}
     });
 
 
-bot.action(/like_(.+)/, async (ctx) => {
+/**
+ * Показує вхідний запит з кнопками «Прийняти / Відмовити».
+ * Username відправника НЕ показується, доки запит не прийнято.
+ */
+async function showIncomingRequest(ctx: any, senderId: number): Promise<void> {
+
+    const request = getPendingRequest(senderId, ctx.from.id);
+
+    if (!request) {
+        await ctx.answerCbQuery("Цей запит уже оброблено");
+        return;
+    }
+
+    const senderProfile = getUser(senderId);
+
+    if (!senderProfile) {
+        updateRequestStatus(request.id, "rejected");
+        await ctx.answerCbQuery("❌ Користувач видалив анкету");
+        return;
+    }
+
+    await ctx.reply(
+        formatProfile(senderProfile, "🎮 Запит на гру"),
+        Markup.inlineKeyboard([
+            [
+                Markup.button.callback("✅ Хочу грати", `accept_${senderId}`),
+                Markup.button.callback("❌ Відмовити", `reject_${senderId}`)
+            ],
+            [
+                Markup.button.callback("⚠️ Поскаржитись", `report_user_${senderId}`)
+            ]
+        ])
+    );
+
+    await ctx.answerCbQuery();
+}
+
+/** Прибирає inline-кнопки з повідомлення, щоб їх не натискали повторно. */
+async function removeButtons(ctx: any): Promise<void> {
+    try {
+        await ctx.editMessageReplyMarkup(undefined);
+    } catch {
+        // Повідомлення застаре або вже без кнопок — це не помилка.
+    }
+}
+
+bot.action(/^like_(\d+)$/, async (ctx) => {
 
     const targetId = Number(ctx.match[1]);
     const currentUserId = ctx.from.id;
@@ -1644,10 +1793,26 @@ bot.action(/like_(.+)/, async (ctx) => {
         return;
     }
 
+    if (!getUser(currentUserId)) {
+        await ctx.answerCbQuery("❌ Спочатку створіть анкету");
+        return;
+    }
+
+    if (!getUser(targetId) || isBanned(targetId)) {
+        await ctx.answerCbQuery("❌ Ця анкета більше недоступна");
+        return;
+    }
+
     const existingMatch = hasMatch(currentUserId, targetId);
 
     if (existingMatch) {
         await ctx.answerCbQuery("🎉 У вас уже є матч із цим користувачем");
+        return;
+    }
+
+    // Ця людина вже запросила нас — пропонуємо одразу прийняти її запит.
+    if (getPendingRequest(targetId, currentUserId)) {
+        await showIncomingRequest(ctx, targetId);
         return;
     }
 
@@ -1663,94 +1828,28 @@ bot.action(/like_(.+)/, async (ctx) => {
         targetId
     );
 
-    await bot.telegram.sendMessage(
-        targetId,
-        "🔔 У вас новий запит на гру!",
-        {
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        {
-                            text: "👀 Переглянути",
-                            callback_data: `request_from_${currentUserId}`
-                        }
-                    ],
-                    [
-                        {
-                            text: "🔍 Шукати далі",
-                            callback_data: "continue_search"
-                        }
-                    ]
-                ]
-            }
-        }
-    );
-
-    await ctx.reply("✅ Запит відправлено!");
-    await ctx.answerCbQuery();
-
-});
-    bot.action(/request_from_(.+)/, async (ctx) => {
-
-        const senderId = Number(ctx.match[1]);
-
-        const profile: any = getUser(senderId);
-
-        if (!profile) {
-            return ctx.answerCbQuery(
-                "Анкету не знайдено"
-            );
-        }
-
-        const userGames: any[] =
-            getUserGames(profile.telegram_id) as any[];
-
-        const gamesText =
-            userGames.length
-                ? userGames
-                    .map(
-                        (g: any) =>
-                            `🎮 ${g.game} — ${g.rank}`
-                    )
-                    .join("\n")
-                : "🎮 Ігри не вказані";
-
-        await ctx.reply(
-            `🎮 Запит на гру
-
-👤 ${profile.name}
-
-📱 ${
-                profile.username
-                    ? `@${profile.username}`
-                    : "Username не вказано"
-            }
-
-${gamesText}
-🎂 Вік: ${profile.age}
-👤 Стать: ${profile.gender}
-
-📝 ${profile.about}`,
+    try {
+        await bot.telegram.sendMessage(
+            targetId,
+            "🔔 У вас новий запит на гру!",
             Markup.inlineKeyboard([
-                [
-                    Markup.button.callback(
-                        "🎮 Запросити в гру",
-                        `like_${profile.telegram_id}`
-                    )
-                ],
-                [
-                    Markup.button.callback(
-                        "⚠️ Поскаржитись",
-                        `report_user_${profile.telegram_id}`
-                    )
-                ],
+                [Markup.button.callback("👀 Переглянути", `request_from_${currentUserId}`)]
             ])
         );
+    } catch {
+        // Отримувач заблокував бота — запит лишається в розділі «📨 Запити».
+    }
 
-        await ctx.answerCbQuery();
+    await ctx.answerCbQuery("✅ Запит відправлено!");
+    await ctx.reply("✅ Запит відправлено! Коли гравець прийме його, ви отримаєте контакт.");
 
-    });
+});
 
+bot.action(/^request_from_(\d+)$/, async (ctx) => {
+    await showIncomingRequest(ctx, Number(ctx.match[1]));
+});
+
+    // Залишено для кнопок у старих повідомленнях.
     bot.action("continue_search", async (ctx) => {
 
         await ctx.answerCbQuery(
@@ -1793,137 +1892,91 @@ ${gamesText}
 
     });
 
-    bot.action(/request_(.+)/, async (ctx) => {
+    bot.action(/^request_(\d+)$/, async (ctx) => {
 
         const requestId = Number(ctx.match[1]);
 
-        const requests: any[] = getRequests(
-            ctx.from.id
-        );
-
-        const request: any =
-            requests.find(
-                (r: any) => r.id === requestId
-            );
+        const request = getRequests(ctx.from.id)
+            .find((r) => r.id === requestId);
 
         if (!request) {
-
-            await ctx.answerCbQuery(
-                "Запит не знайдено"
-            );
-
+            await ctx.answerCbQuery("Цей запит уже оброблено");
             return;
         }
 
-        const senderProfile: any =
-            getUser(request.from_user);
-
-        const userGames: any[] =
-            getUserGames(senderProfile.telegram_id) as any[];
-
-        const gamesText =
-            userGames.length
-                ? userGames
-                    .map(
-                        (g: any) =>
-                            `🎮 ${g.game} — ${g.rank}`
-                    )
-                    .join("\n")
-                : "🎮 Ігри не вказані";
-
-        await ctx.reply(
-            `🎮 Запит на гру
-
-👤 ${senderProfile.name}
-
-${gamesText}
-🎂 Вік: ${senderProfile.age}
-👤 Стать: ${senderProfile.gender}
-
-📝 ${senderProfile.about}`,
-            Markup.inlineKeyboard([
-                [
-                    Markup.button.callback(
-                        "✅ Хочу грати",
-                        `accept_${request.from_user}`
-                    ),
-                    Markup.button.callback(
-                        "❌ Відмовити",
-                        `reject_${request.from_user}`
-                    )
-                ]
-            ])
-        );
-
-        await ctx.answerCbQuery();
+        await showIncomingRequest(ctx, request.from_user);
 
     });
-bot.action(/accept_(.+)/, async (ctx) => {
+
+function matchText(profile: UserRecord): string {
+    const contact = profile.username
+        ? `📱 @${profile.username}`
+        : `📱 Username не вказано — посилання: tg://user?id=${profile.telegram_id}`;
+
+    return `🎉 МАТЧ ЗНАЙДЕНО!
+
+👤 ${profile.name}
+
+${contact}
+
+Тепер можете написати один одному 🎮`;
+}
+
+bot.action(/^accept_(\d+)$/, async (ctx) => {
 
     const senderId = Number(ctx.match[1]);
     const currentUserId = ctx.from.id;
 
-    const senderProfile: any = getUser(senderId);
-    const currentProfile: any = getUser(currentUserId);
+    // Прийняти можна лише реальний запит, що ще очікує відповіді.
+    const pendingRequest = getPendingRequest(senderId, currentUserId);
 
-    if (!senderProfile || !currentProfile) {
-        await ctx.answerCbQuery("❌ Анкету не знайдено");
+    if (!pendingRequest) {
+        await removeButtons(ctx);
+        await ctx.answerCbQuery("Цей запит уже оброблено");
         return;
     }
 
-    const existingMatch = hasMatch(senderId, currentUserId);
+    const senderProfile = getUser(senderId);
+    const currentProfile = getUser(currentUserId);
 
-    if (!existingMatch) {
+    if (!senderProfile || !currentProfile || isBanned(senderId)) {
+        updateRequestStatus(pendingRequest.id, "rejected");
+        await removeButtons(ctx);
+        await ctx.answerCbQuery("❌ Анкета більше недоступна");
+        return;
+    }
+
+    updateRequestStatus(pendingRequest.id, "accepted");
+
+    if (!hasMatch(senderId, currentUserId)) {
         createMatch(senderId, currentUserId);
     }
 
-    const pendingRequest: any = getPendingRequest(senderId, currentUserId);
+    await removeButtons(ctx);
 
-    if (pendingRequest) {
-        updateRequestStatus(pendingRequest.id, "accepted");
+    try {
+        await bot.telegram.sendMessage(senderId, matchText(currentProfile));
+    } catch {
+        // Відправник заблокував бота — контакт все одно отримає той, хто прийняв.
     }
 
-    await bot.telegram.sendMessage(
-        senderId,
-        `🎉 МАТЧ ЗНАЙДЕНО!
-
-👤 ${currentProfile.name}
-
-${currentProfile.username
-            ? `📱 @${currentProfile.username}`
-            : "📱 Username не вказано"}
-
-Тепер можете написати один одному 🎮`
-    );
-
-    await bot.telegram.sendMessage(
-        currentUserId,
-        `🎉 МАТЧ ЗНАЙДЕНО!
-
-👤 ${senderProfile.name}
-
-${senderProfile.username
-            ? `📱 @${senderProfile.username}`
-            : "📱 Username не вказано"}
-
-Тепер можете написати один одному 🎮`
-    );
-
-    await ctx.reply("🎉 Запит прийнято!");
-    await ctx.answerCbQuery();
+    await ctx.reply(matchText(senderProfile));
+    await ctx.answerCbQuery("🎉 Запит прийнято!");
 
 });
-bot.action(/reject_(.+)/, async (ctx) => {
+
+bot.action(/^reject_(\d+)$/, async (ctx) => {
 
     const senderId = Number(ctx.match[1]);
     const currentUserId = ctx.from.id;
 
-    const pendingRequest: any = getPendingRequest(senderId, currentUserId);
+    const pendingRequest = getPendingRequest(senderId, currentUserId);
 
     if (pendingRequest) {
         updateRequestStatus(pendingRequest.id, "rejected");
     }
 
+    await removeButtons(ctx);
     await ctx.reply("❌ Запит відхилено");
     await ctx.answerCbQuery();
 
@@ -2023,7 +2076,7 @@ ${gamesText}
 });
 
 bot.action(
-    /report_user_(.+)/,
+    /^report_user_(\d+)$/,
     async (ctx) => {
 
         const targetId =
@@ -2070,10 +2123,27 @@ bot.action(
 );
 
 
-bot.launch()
-    .then(() => {
-        console.log("🚀 Bot started");
-    })
-    .catch(console.error);
+// Будь-яка помилка в обробнику більше не зупиняє бота.
+bot.catch(async (err, ctx) => {
+    console.error(`Помилка під час обробки update ${ctx.update.update_id}:`, err);
 
-console.log("Bot started");
+    try {
+        if (ctx.callbackQuery) {
+            await ctx.answerCbQuery("⚠️ Сталася помилка, спробуйте ще раз");
+        } else if (ctx.chat) {
+            await ctx.reply("⚠️ Сталася помилка. Спробуйте ще раз або натисніть /start");
+        }
+    } catch {
+        // Не вдалося навіть повідомити користувача — просто логуємо вище.
+    }
+});
+
+bot.launch(() => {
+    console.log("🚀 Bot started");
+}).catch((err) => {
+    console.error("❌ Не вдалося запустити бота:", err);
+    process.exit(1);
+});
+
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));

@@ -43,3 +43,6 @@ coverage/
 
 # TypeScript
 *.tsbuildinfo
+# Backups
+*.backup.ts
+*.backup.js

@@ -1,6 +1,18 @@
 ﻿import Database from "better-sqlite3";
+import fs from "fs";
+import path from "path";
 
-const db = new Database("database.db");
+// На сервері DB_PATH має вказувати на постійний диск (наприклад /data/database.db),
+// інакше база зникає при кожному деплої або перезапуску контейнера.
+const dbPath = process.env.DB_PATH?.trim() || "database.db";
+
+fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
+
+const db = new Database(dbPath);
+
+db.pragma("journal_mode = WAL");
+
+console.log(`🗄 База даних: ${path.resolve(dbPath)}`);
 
 
 try {

@@ -1,5 +1,14 @@
 import db from "./db";
 
+export type RequestStatus = "pending" | "accepted" | "rejected";
+
+export interface RequestRecord {
+    id: number;
+    from_user: number;
+    to_user: number;
+    status: RequestStatus;
+}
+
 export function createRequest(
     fromUser: number,
     toUser: number
@@ -23,7 +32,7 @@ export function getRequests(
         WHERE to_user = ?
           AND status = 'pending'
         ORDER BY id DESC
-    `).all(toUser);
+    `).all(toUser) as RequestRecord[];
 }
 
 export function getRequestBetween(
@@ -41,12 +50,12 @@ export function getRequestBetween(
         )
         ORDER BY id DESC
         LIMIT 1
-    `).get(user1, user2, user2, user1);
+    `).get(user1, user2, user2, user1) as RequestRecord | undefined;
 }
 
 export function updateRequestStatus(
     requestId: number,
-    status: string
+    status: RequestStatus
 ) {
     db.prepare(`
         UPDATE requests
@@ -66,19 +75,5 @@ export function getPendingRequest(
           AND to_user = ?
           AND status = 'pending'
         LIMIT 1
-    `).get(fromUser, toUser);
-}
-
-export function getIncomingPendingRequest(
-    fromUser: number,
-    toUser: number
-) {
-    return db.prepare(`
-        SELECT *
-        FROM requests
-        WHERE from_user = ?
-          AND to_user = ?
-          AND status = 'pending'
-        LIMIT 1
-    `).get(fromUser, toUser);
+    `).get(fromUser, toUser) as RequestRecord | undefined;
 }
