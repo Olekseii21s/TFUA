@@ -187,6 +187,51 @@ function chunk<T>(items: T[], size: number): T[][] {
     return rows;
 }
 
+// ----- Обмеження частоти дій (захист від спаму) -----
+
+const rateLog = new Map<string, number[]>();
+
+const HOUR = 60 * 60 * 1000;
+
+const LIMITS = {
+    bugReport: { limit: 3, windowMs: HOUR },
+    complaint: { limit: 5, windowMs: HOUR },
+    invite: { limit: 40, windowMs: HOUR },
+    // Загальний захист від флуду: не більше 30 дій за 10 секунд.
+    flood: { limit: 30, windowMs: 10 * 1000 }
+};
+
+/**
+ * Перевіряє ліміт для ключа. Якщо record=true і ліміт не вичерпано — зараховує дію.
+ * Повертає false, якщо ліміт вичерпано.
+ */
+function allowAction(key: string, rule: { limit: number; windowMs: number }, record = true): boolean {
+    const now = Date.now();
+    const recent = (rateLog.get(key) || []).filter((t) => now - t < rule.windowMs);
+
+    if (recent.length >= rule.limit) {
+        rateLog.set(key, recent);
+        return false;
+    }
+
+    if (record) recent.push(now);
+
+    rateLog.set(key, recent);
+
+    return true;
+}
+
+// Прибираємо застарілі записи, щоб пам'ять не росла.
+setInterval(() => {
+    const now = Date.now();
+
+    for (const [key, times] of rateLog) {
+        if (!times.some((t) => now - t < HOUR)) rateLog.delete(key);
+    }
+}, 10 * 60 * 1000).unref();
+
+const LIMIT_TEXT = "⏳ Забагато спроб. Спробуйте пізніше.";
+
 function escapeHtml(text: string): string {
     return text
         .replace(/&/g, "&amp;")
@@ -230,6 +275,20 @@ function allowedAgeRange(age: number): { min: number; max: number } {
     return isMinor(age)
         ? { min: MIN_AGE, max: ADULT_AGE - 1 }
         : { min: ADULT_AGE, max: MAX_AGE };
+}
+
+/**
+ * Чи можуть двоє користувачів взаємодіяти: обоє неповнолітні або обоє дорослі.
+ * Перевіряється на сервері для кожного запрошення та прийняття — не лише в пошуку,
+ * бо кнопку like_<id> можна надіслати в обхід пошуку модифікованим клієнтом.
+ */
+function sameAgeGroup(a: UserRecord, b: UserRecord): boolean {
+    const ageA = Number(a.age);
+    const ageB = Number(b.age);
+
+    if (!Number.isFinite(ageA) || !Number.isFinite(ageB)) return false;
+
+    return isMinor(ageA) === isMinor(ageB);
 }
 
 /** Наскільки рангів вгору/вниз шукати від обраного (≈12% шкали, мінімум 2). */
@@ -385,6 +444,15 @@ bot.use(async (ctx, next) => {
         return;
     }
 
+    // Захист від флуду: надто часті дії від одного користувача просто ігноруємо.
+    if (userId && userId !== ADMIN_ID && !allowAction(`flood:${userId}`, LIMITS.flood)) {
+        if (ctx.callbackQuery) {
+            await ctx.answerCbQuery(LIMIT_TEXT).catch(() => undefined);
+        }
+
+        return;
+    }
+
     return next();
 });
 
@@ -434,6 +502,10 @@ bot.hears(BTN.back, async (ctx) => {
 });
 
 bot.hears(BTN.bug, async (ctx) => {
+    if (!allowAction(`bug:${ctx.from.id}`, LIMITS.bugReport, false)) {
+        return ctx.reply("⏳ Ви вже надіслали кілька повідомлень. Спробуйте через годину.", mainMenu(ctx.from.id));
+    }
+
     registrationState.set(ctx.from.id, newState("bug"));
 
     return ctx.reply(
@@ -1180,8 +1252,9 @@ async function sendIncomingRequest(ctx: Context, senderId: number): Promise<stri
     if (!request) return "Цей запит уже оброблено";
 
     const senderProfile = getUser(senderId);
+    const currentProfile = getUser(ctx.from!.id);
 
-    if (!senderProfile || isBanned(senderId)) {
+    if (!senderProfile || !currentProfile || isBanned(senderId) || !sameAgeGroup(senderProfile, currentProfile)) {
         updateRequestStatus(request.id, "rejected");
         return "❌ Анкета більше недоступна";
     }
@@ -1261,8 +1334,12 @@ bot.action(/^like_(\d+)$/, async (ctx) => {
         return;
     }
 
-    if (!getUser(targetId) || isBanned(targetId)) {
-        await ctx.answerCbQuery("❌ Ця анкета більше недоступна");
+    const currentProfile = getUser(currentUserId)!;
+    const targetProfile = getUser(targetId);
+
+    // sameAgeGroup: дорослий не може запросити неповнолітнього і навпаки — навіть в обхід пошуку.
+    if (!targetProfile || isBanned(targetId) || !sameAgeGroup(currentProfile, targetProfile)) {
+        await ctx.answerCbQuery("❌ Ця анкета недоступна");
         await removeButtons(ctx);
         await advanceSearch(ctx, targetId);
         return;
@@ -1283,6 +1360,11 @@ bot.action(/^like_(\d+)$/, async (ctx) => {
 
     if (getPendingRequest(currentUserId, targetId)) {
         await ctx.answerCbQuery("⚠️ Ви вже відправили запит цьому гравцю");
+        return;
+    }
+
+    if (!allowAction(`invite:${currentUserId}`, LIMITS.invite)) {
+        await ctx.answerCbQuery("⏳ Забагато запрошень за годину. Спробуйте пізніше.", { show_alert: true });
         return;
     }
 
@@ -1358,7 +1440,7 @@ bot.action(/^accept_(\d+)$/, async (ctx) => {
     const senderProfile = getUser(senderId);
     const currentProfile = getUser(currentUserId);
 
-    if (!senderProfile || !currentProfile || isBanned(senderId)) {
+    if (!senderProfile || !currentProfile || isBanned(senderId) || !sameAgeGroup(senderProfile, currentProfile)) {
         updateRequestStatus(pendingRequest.id, "rejected");
         await ctx.answerCbQuery("❌ Анкета більше недоступна");
         return;
@@ -1414,6 +1496,11 @@ bot.action(/^report_user_(\d+)$/, async (ctx) => {
         return;
     }
 
+    if (!allowAction(`complaint:${ctx.from.id}`, LIMITS.complaint, false)) {
+        await ctx.answerCbQuery("⏳ Забагато скарг за годину. Спробуйте пізніше.", { show_alert: true });
+        return;
+    }
+
     registrationState.set(ctx.from.id, newState("report", { targetId }));
 
     await ctx.answerCbQuery();
@@ -1431,6 +1518,10 @@ async function handleReport(ctx: Context, state: FlowState, text: string) {
 
     // Стан скарги очищаємо одразу, щоб наступні повідомлення не йшли як нові скарги.
     registrationState.delete(telegramId);
+
+    if (!allowAction(`complaint:${telegramId}`, LIMITS.complaint)) {
+        return ctx.reply(LIMIT_TEXT, mainMenu(telegramId));
+    }
 
     const reportedUser = getUser(reportedId);
 
@@ -1487,6 +1578,10 @@ async function handleBugReport(ctx: Context, text: string) {
     if (error) return ctx.reply(error);
 
     registrationState.delete(telegramId);
+
+    if (!allowAction(`bug:${telegramId}`, LIMITS.bugReport)) {
+        return ctx.reply(LIMIT_TEXT, mainMenu(telegramId));
+    }
 
     try {
         await bot.telegram.sendMessage(
