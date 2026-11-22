@@ -77,3 +77,16 @@ export function getPendingRequest(
         LIMIT 1
     `).get(fromUser, toUser) as RequestRecord | undefined;
 }
+
+/** ID усіх, з ким у користувача вже був запит у будь-який бік і з будь-яким статусом. */
+export function getInteractedUserIds(
+    userId: number
+): number[] {
+    const rows = db.prepare(`
+        SELECT to_user AS other FROM requests WHERE from_user = ?
+        UNION
+        SELECT from_user AS other FROM requests WHERE to_user = ?
+    `).all(userId, userId) as { other: number }[];
+
+    return rows.map((row) => row.other);
+}

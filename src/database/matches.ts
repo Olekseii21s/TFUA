@@ -21,3 +21,21 @@ export function hasMatch(
            OR (user1 = ? AND user2 = ?)
     `).get(user1, user2, user2, user1);
 }
+
+/** ID усіх, з ким у користувача є матч (нові — першими). */
+export function getMatchedUserIds(
+    userId: number
+): number[] {
+    const rows = db.prepare(`
+        SELECT CASE WHEN user1 = ? THEN user2 ELSE user1 END AS other
+        FROM matches
+        WHERE user1 = ? OR user2 = ?
+        ORDER BY id DESC
+    `).all(userId, userId, userId) as { other: number }[];
+
+    return [...new Set(rows.map((row) => row.other))];
+}
+
+export function countMatches(): number {
+    return (db.prepare(`SELECT COUNT(*) AS c FROM matches`).get() as { c: number }).c;
+}

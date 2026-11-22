@@ -1,4 +1,4 @@
-﻿import Database from "better-sqlite3";
+import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 
@@ -102,5 +102,18 @@ db.exec(`
 try {
     db.exec(`ALTER TABLE search_preferences ADD COLUMN rank_filters TEXT`);
 } catch {}
+
+try {
+    db.exec(`ALTER TABLE hidden_profiles ADD COLUMN created_at INTEGER`);
+} catch {}
+
+db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_user_games_user ON user_games (telegram_id);
+    CREATE INDEX IF NOT EXISTS idx_requests_from ON requests (from_user, to_user, status);
+    CREATE INDEX IF NOT EXISTS idx_requests_to ON requests (to_user, status);
+    CREATE INDEX IF NOT EXISTS idx_matches_user1 ON matches (user1);
+    CREATE INDEX IF NOT EXISTS idx_matches_user2 ON matches (user2);
+    CREATE INDEX IF NOT EXISTS idx_hidden_user ON hidden_profiles (user_id, hidden_user_id);
+`);
 
 export default db;
