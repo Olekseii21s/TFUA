@@ -27,7 +27,7 @@ function requireEnv(name: string): string {
     const value = process.env[name]?.trim();
 
     if (!value) {
-        console.error(`❌ Не задано змінну ${name} у файлі .env (див. .env.example)`);
+        console.error(`❌ Не задано змінну ${name} у файлі .env або в налаштуваннях сервера`);
         process.exit(1);
     }
 
