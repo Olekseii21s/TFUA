@@ -14,6 +14,13 @@ export const deleteUser = db.transaction((telegramId: number) => {
         WHERE from_user = ? OR to_user = ?
     `).run(telegramId, telegramId);
 
+    db.prepare(`DELETE FROM sessions WHERE telegram_id = ?`).run(telegramId);
+
+    db.prepare(`
+        DELETE FROM reports
+        WHERE reporter_id = ? OR target_id = ?
+    `).run(telegramId, telegramId);
+
     db.prepare(`
         DELETE FROM likes
         WHERE from_user = ? OR to_user = ?
