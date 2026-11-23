@@ -15,6 +15,7 @@ import { getUser, saveUser, updateField } from "../database/users";
 import { getUserGames, replaceUserGames } from "../database/userGames";
 import { deleteUser } from "../database/deleteUser";
 import { formatProfile } from "../ui/format";
+import { notifyAboutNewPlayer } from "../services/notifications";
 import { gamesKeyboard, mainMenu, profileMenu, rankKeyboard, stepKeyboard } from "../ui/keyboards";
 import { handleGamesStep, requireProfile } from "./common";
 
@@ -181,10 +182,15 @@ export async function handleProfileWizard(ctx: Context, state: FlowState, text: 
 
             const profile = getUser(telegramId)!;
 
-            return ctx.reply(
+            await ctx.reply(
                 `${formatProfile(profile, "✅ Анкету створено!")}\n\nТепер натисніть «${BTN.search}», щоб знайти тімейтів 🎯`,
                 mainMenu(telegramId)
             );
+
+            // У фоні повідомляємо тих, кому цей гравець підходить під фільтри.
+            void notifyAboutNewPlayer(ctx.telegram, profile);
+
+            return;
         }
     }
 }

@@ -146,6 +146,17 @@ const migrations: Migration[] = [
             DROP INDEX IF EXISTS idx_hidden_user;
             CREATE UNIQUE INDEX IF NOT EXISTS idx_hidden_pair ON hidden_profiles (user_id, hidden_user_id);
         `);
+    },
+
+    // 3 — сповіщення про нових гравців: увімкнено/вимкнено і час останнього.
+    (database) => {
+        database.exec(`
+            CREATE TABLE IF NOT EXISTS notification_settings (
+                telegram_id INTEGER PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                last_notified_at INTEGER
+            );
+        `);
     }
 ];
 

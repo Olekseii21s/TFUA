@@ -4,6 +4,9 @@ import { Telegram } from "telegraf";
 import { createBot } from "../src/bot";
 import { LIMITS } from "../src/services/rateLimit";
 import { setDocumentUploader } from "../src/services/backup";
+import * as notifications from "../src/services/notifications";
+
+notifications.NOTIFY_DELAY.ms = 0;
 
 export interface ApiCall {
     method: string;
@@ -55,10 +58,11 @@ export function createTestBot() {
 
     let updateId = 1;
 
-    const send = (from: TestUser, text: string) => {
+    // Після кожного апдейту чекаємо фонову розсилку сповіщень — щоб тести були детермінованими.
+    const send = async (from: TestUser, text: string) => {
         const isCommand = text.startsWith("/");
 
-        return bot.handleUpdate({
+        await bot.handleUpdate({
             update_id: updateId++,
             message: {
                 message_id: updateId,
@@ -71,18 +75,24 @@ export function createTestBot() {
                     : {})
             }
         } as any);
+
+        await notifications.lastNotificationRun;
     };
 
-    const press = (from: TestUser, data: string) => bot.handleUpdate({
-        update_id: updateId++,
-        callback_query: {
-            id: String(updateId),
-            from,
-            chat_instance: "test",
-            data,
-            message: { message_id: 5, date: 0, chat: { id: from.id, type: "private" }, text: "card" }
-        }
-    } as any);
+    const press = async (from: TestUser, data: string) => {
+        await bot.handleUpdate({
+            update_id: updateId++,
+            callback_query: {
+                id: String(updateId),
+                from,
+                chat_instance: "test",
+                data,
+                message: { message_id: 5, date: 0, chat: { id: from.id, type: "private" }, text: "card" }
+            }
+        } as any);
+
+        await notifications.lastNotificationRun;
+    };
 
     const register = async (
         u: TestUser,

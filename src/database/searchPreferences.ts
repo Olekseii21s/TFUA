@@ -1,5 +1,14 @@
 ﻿import db from "./db";
 
+export interface SearchPreferencesRow {
+    telegram_id: number;
+    games: string;
+    gender: string;
+    min_age: number;
+    max_age: number;
+    rank_filters: string | null;
+}
+
 export function saveSearchPreferences(
     telegramId: number,
     games: string[],
@@ -24,12 +33,17 @@ export function saveSearchPreferences(
 
 export function getSearchPreferences(
     telegramId: number
-) {
+): SearchPreferencesRow | undefined {
     return db.prepare(`
         SELECT *
         FROM search_preferences
         WHERE telegram_id = ?
-    `).get(telegramId) as any;
+    `).get(telegramId) as SearchPreferencesRow | undefined;
+}
+
+/** Фільтри всіх користувачів — щоб знайти, кому цікавий новий гравець. */
+export function getAllSearchPreferences(): SearchPreferencesRow[] {
+    return db.prepare(`SELECT * FROM search_preferences`).all() as SearchPreferencesRow[];
 }
 
 export function deleteSearchPreferences(

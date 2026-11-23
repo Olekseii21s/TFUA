@@ -8,6 +8,7 @@ import { getUser, UserRecord } from "../database/users";
 import { isBanned } from "../database/bans";
 import { hideProfile } from "../database/hiddenProfiles";
 import { saveSearchPreferences } from "../database/searchPreferences";
+import { isNotifyEnabled, setNotifyEnabled } from "../database/notifications";
 import { describePrefs, formatProfile } from "../ui/format";
 import { gamesKeyboard, mainMenu, rankKeyboard, searchCardKeyboard, stepKeyboard } from "../ui/keyboards";
 import { handleGamesStep, removeButtons, requireProfile } from "./common";
@@ -116,7 +117,12 @@ async function finishSearchSetup(ctx: Context, state: FlowState, minAge: number,
 
     const prefs = loadSearchPrefs(telegramId)!;
 
-    await ctx.reply(`✅ Фільтри збережено\n\n${describePrefs(prefs)}`);
+    // Нові фільтри — знову вмикаємо сповіщення, якщо їх вимикали.
+    const notifyNote = isNotifyEnabled(telegramId) ? "" : "\n\n🔔 Сповіщення про нових гравців знову увімкнено.";
+
+    setNotifyEnabled(telegramId, true);
+
+    await ctx.reply(`✅ Фільтри збережено\n\n${describePrefs(prefs)}${notifyNote}`);
 
     return runSearch(ctx, getUser(telegramId)!, prefs);
 }
@@ -204,22 +210,45 @@ export async function handleSearchSetup(ctx: Context, state: FlowState, text: st
     }
 }
 
+/** Кнопка «Шукати тімейтів»: за збереженими фільтрами або спершу налаштування. */
+async function startSearch(ctx: Context) {
+    const profile = requireProfile(ctx);
+
+    if (!profile) return;
+
+    flowStore.delete(ctx.from!.id);
+
+    const prefs = loadSearchPrefs(ctx.from!.id);
+
+    if (!prefs || !prefs.games.length) {
+        return startSearchSetup(ctx, "Спершу налаштуємо, кого шукати — це один раз.\n\n");
+    }
+
+    return runSearch(ctx, profile, prefs);
+}
+
 export function registerSearchHandlers(bot: Telegraf) {
 
-    bot.hears(BTN.search, async (ctx) => {
-        const profile = requireProfile(ctx);
+    bot.hears(BTN.search, startSearch);
 
-        if (!profile) return;
+    // Кнопки зі сповіщення про нового гравця.
+    bot.action("notify_search", async (ctx) => {
+        await ctx.answerCbQuery();
+        await removeButtons(ctx);
 
-        flowStore.delete(ctx.from.id);
+        return startSearch(ctx);
+    });
 
-        const prefs = loadSearchPrefs(ctx.from.id);
+    bot.action("notify_off", async (ctx) => {
+        setNotifyEnabled(ctx.from.id, false);
 
-        if (!prefs || !prefs.games.length) {
-            return startSearchSetup(ctx, "Спершу налаштуємо, кого шукати — це один раз.\n\n");
-        }
+        await ctx.answerCbQuery("🔕 Сповіщення вимкнено");
+        await removeButtons(ctx);
 
-        return runSearch(ctx, profile, prefs);
+        return ctx.reply(
+            `🔕 Більше не надсилатиму сповіщення про нових гравців.\n\nЩоб увімкнути — налаштуйте «${BTN.filters}» ще раз.`,
+            mainMenu(ctx.from.id)
+        );
     });
 
     bot.hears([BTN.filters, BTN.legacyEditSearch], async (ctx) => {
