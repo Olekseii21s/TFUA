@@ -5,6 +5,16 @@ import { banUser, unbanUser } from "../database/bans";
 import { getAllUsers } from "../database/users";
 import { countMatches } from "../database/matches";
 import { mainMenu, stepKeyboard } from "../ui/keyboards";
+import { sendBackup } from "../services/backup";
+
+async function backupNow(ctx: Context) {
+    try {
+        await sendBackup(ctx.telegram, ADMIN_ID, "ручний");
+    } catch (err) {
+        console.error("❌ Не вдалося зробити бекап:", err);
+        await ctx.reply("⚠️ Не вдалося зробити бекап. Деталі — у логах сервера.");
+    }
+}
 
 function parseUserIdArg(text: string): number | null {
     const id = Number(text.split(/\s+/)[1]);
@@ -76,9 +86,23 @@ export function registerAdminHandlers(bot: Telegraf) {
                 [Markup.button.callback("📊 Статистика", "admin_stats")],
                 [Markup.button.callback("🐞 Скарги", "admin_reports")],
                 [Markup.button.callback("📢 Розсилка", "admin_broadcast")],
-                [Markup.button.callback("👥 Користувачі", "admin_users")]
+                [Markup.button.callback("👥 Користувачі", "admin_users")],
+                [Markup.button.callback("💾 Бекап бази", "admin_backup")]
             ])
         );
+    });
+
+    bot.command("backup", async (ctx) => {
+        if (ctx.from.id !== ADMIN_ID) return;
+
+        await backupNow(ctx);
+    });
+
+    bot.action("admin_backup", async (ctx) => {
+        if (ctx.from.id !== ADMIN_ID) return;
+
+        await ctx.answerCbQuery("💾 Готую бекап...");
+        await backupNow(ctx);
     });
 
     bot.action("admin_stats", async (ctx) => {

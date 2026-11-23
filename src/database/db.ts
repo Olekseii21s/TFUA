@@ -8,6 +8,9 @@ import path from "path";
 const dbPath = process.env.DB_PATH?.trim() || "database.db";
 const inMemory = dbPath === ":memory:";
 
+/** Повний шлях до файлу бази (або ":memory:" у тестах). */
+export const DB_FILE = inMemory ? ":memory:" : path.resolve(dbPath);
+
 if (!inMemory) {
     fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
 }
