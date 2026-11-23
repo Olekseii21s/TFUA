@@ -3,6 +3,7 @@ import "./env";
 import { Telegram } from "telegraf";
 import { createBot } from "../src/bot";
 import { LIMITS } from "../src/services/rateLimit";
+import { setDocumentUploader } from "../src/services/backup";
 
 export interface ApiCall {
     method: string;
@@ -27,6 +28,11 @@ Telegram.prototype.callApi = async function (method: string, payload: any) {
 
     return { message_id: 1, chat: { id: payload.chat_id } } as any;
 } as any;
+
+// Файли бекапу теж не відправляємо в мережу — лише записуємо виклик.
+setDocumentUploader(async (chatId, _file, filename, caption) => {
+    calls.push({ method: "sendDocument", chat_id: chatId, caption, document: { filename } });
+});
 
 // У тестах користувачі діють дуже швидко — загальний антифлуд вимикаємо (окремий тест вмикає).
 LIMITS.flood.limit = 100_000;

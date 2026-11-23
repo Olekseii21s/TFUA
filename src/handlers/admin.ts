@@ -6,12 +6,13 @@ import { getAllUsers } from "../database/users";
 import { countMatches } from "../database/matches";
 import { mainMenu, stepKeyboard } from "../ui/keyboards";
 import { sendBackup } from "../services/backup";
+import { logError } from "../logging";
 
 async function backupNow(ctx: Context) {
     try {
-        await sendBackup(ctx.telegram, ADMIN_ID, "ручний");
+        await sendBackup(ADMIN_ID, "ручний");
     } catch (err) {
-        console.error("❌ Не вдалося зробити бекап:", err);
+        logError("❌ Не вдалося зробити бекап:", err);
         await ctx.reply("⚠️ Не вдалося зробити бекап. Деталі — у логах сервера.");
     }
 }

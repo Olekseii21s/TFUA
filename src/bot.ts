@@ -4,6 +4,7 @@ import { BANNED_TEXT, LIMIT_TEXT } from "./constants";
 import { flowStore, searchStore } from "./state";
 import { allowAction, LIMITS } from "./services/rateLimit";
 import { isBanned } from "./database/bans";
+import { logError } from "./logging";
 import { registerStartHandlers } from "./handlers/start";
 import { registerProfileHandlers } from "./handlers/profile";
 import { registerSearchHandlers } from "./handlers/search";
@@ -68,7 +69,7 @@ export function createBot(token: string): Telegraf {
 
     // Будь-яка помилка в обробнику не зупиняє бота.
     bot.catch(async (err, ctx) => {
-        console.error(`Помилка під час обробки update ${ctx.update.update_id}:`, err);
+        logError(`Помилка під час обробки update ${ctx.update.update_id}:`, err);
 
         try {
             if (ctx.callbackQuery) {

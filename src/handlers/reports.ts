@@ -11,6 +11,7 @@ import { LIMIT_TEXT } from "../constants";
 import { formatProfile } from "../ui/format";
 import { mainMenu, stepKeyboard } from "../ui/keyboards";
 import { advanceSearch } from "./search";
+import { logError } from "../logging";
 
 export async function handleReport(ctx: Context, state: FlowState, text: string) {
     const telegramId = ctx.from!.id;
@@ -56,7 +57,7 @@ ${formatProfile(reportedUser)}
 ${text}`
         );
     } catch (err) {
-        console.error("Не вдалося надіслати скаргу в канал:", err);
+        logError("Не вдалося надіслати скаргу в канал:", err);
 
         return ctx.reply("⚠️ Не вдалося надіслати скаргу. Спробуйте пізніше.", mainMenu(telegramId));
     }
@@ -98,7 +99,7 @@ export async function handleBugReport(ctx: Context, text: string) {
 ${text}`
         );
     } catch (err) {
-        console.error("Не вдалося надіслати повідомлення про проблему в канал:", err);
+        logError("Не вдалося надіслати повідомлення про проблему в канал:", err);
 
         return ctx.reply("⚠️ Не вдалося надіслати повідомлення. Спробуйте пізніше.", mainMenu(telegramId));
     }

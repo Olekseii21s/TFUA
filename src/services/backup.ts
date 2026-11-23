@@ -2,7 +2,8 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import zlib from "zlib";
-import type { Telegram } from "telegraf";
+import { BOT_TOKEN } from "../config";
+import { logError } from "../logging";
 import db, { DB_FILE } from "../database/db";
 import { getAllUsers } from "../database/users";
 
@@ -66,22 +67,88 @@ export async function createBackup(): Promise<{ file: string; size: number }> {
     return { file: gzFile, size: fs.statSync(gzFile).size };
 }
 
+export type DocumentUploader = (
+    chatId: number,
+    file: Buffer,
+    filename: string,
+    caption: string
+) => Promise<void>;
+
+/** Налаштування повторних спроб відправки (у тестах затримку зменшують). */
+export const UPLOAD_RETRY = { attempts: 3, delayMs: 2000 };
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Відправка файлу через вбудований у Node fetch.
+ * Вбудоване в Telegraf завантаження файлів (старий node-fetch) на нових версіях Node
+ * обривається з «socket hang up», тому файли надсилаємо напряму, з повторними спробами.
+ */
+const telegramUploader: DocumentUploader = async (chatId, file, filename, caption) => {
+    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= UPLOAD_RETRY.attempts; attempt++) {
+        let waitMs = UPLOAD_RETRY.delayMs * attempt;
+
+        try {
+            const form = new FormData();
+            form.append("chat_id", String(chatId));
+            form.append("caption", caption);
+            form.append("document", new Blob([new Uint8Array(file)]), filename);
+
+            const response = await fetch(url, {
+                method: "POST",
+                body: form,
+                signal: AbortSignal.timeout(60_000)
+            });
+
+            const data = await response.json().catch(() => ({})) as {
+                ok?: boolean;
+                description?: string;
+                parameters?: { retry_after?: number };
+            };
+
+            if (response.ok && data.ok) return;
+
+            lastError = new Error(`Telegram API ${response.status}: ${data.description ?? "невідома помилка"}`);
+
+            // Помилки запиту (не той чат, завеликий файл тощо) повтор не виправить.
+            if (response.status < 500 && response.status !== 429) throw lastError;
+
+            if (data.parameters?.retry_after) waitMs = data.parameters.retry_after * 1000;
+        } catch (err) {
+            if (err === lastError) throw err;
+
+            // Мережева помилка (обрив з'єднання, тайм-аут) — пробуємо ще раз.
+            lastError = err;
+        }
+
+        if (attempt < UPLOAD_RETRY.attempts) await sleep(waitMs);
+    }
+
+    throw lastError;
+};
+
+let uploader: DocumentUploader = telegramUploader;
+
+/** Підміна способу відправки (для тестів). Без аргументу — повертає справжній. */
+export function setDocumentUploader(custom?: DocumentUploader): void {
+    uploader = custom ?? telegramUploader;
+}
+
 /** Робить бекап і надсилає файл адміністратору в Telegram (копія поза сервером). */
-export async function sendBackup(telegram: Telegram, chatId: number, reason: string): Promise<void> {
+export async function sendBackup(chatId: number, reason: string): Promise<void> {
     const { file, size } = await createBackup();
 
-    await telegram.sendDocument(
-        chatId,
-        { source: file, filename: path.basename(file) },
-        {
-            caption: `💾 Бекап бази (${reason})
+    const caption = `💾 Бекап бази (${reason})
 
 👥 Анкет: ${getAllUsers().length}
 📦 Розмір: ${Math.max(1, Math.round(size / 1024))} КБ
 
-🔒 У файлі персональні дані користувачів — не пересилайте його нікому.`
-        }
-    );
+🔒 У файлі персональні дані користувачів — не пересилайте його нікому.`;
+
+    await uploader(chatId, fs.readFileSync(file), path.basename(file), caption);
 }
 
 function msUntilNextBackup(now = new Date()): number {
@@ -98,13 +165,13 @@ function msUntilNextBackup(now = new Date()): number {
 }
 
 /** Запускає щоденний бекап з відправкою адміністратору. */
-export function scheduleDailyBackup(telegram: Telegram, chatId: number): void {
+export function scheduleDailyBackup(chatId: number): void {
     const run = async () => {
         try {
-            await sendBackup(telegram, chatId, "щоденний");
+            await sendBackup(chatId, "щоденний");
             console.log("💾 Щоденний бекап надіслано адміністратору");
         } catch (err) {
-            console.error("❌ Не вдалося зробити щоденний бекап:", err);
+            logError("❌ Не вдалося зробити щоденний бекап:", err);
         }
 
         setTimeout(run, msUntilNextBackup()).unref();

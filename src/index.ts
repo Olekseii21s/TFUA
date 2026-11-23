@@ -6,6 +6,7 @@ import { SESSION_TTL_DAYS } from "./constants";
 import { createBot } from "./bot";
 import { purgeOldSessions } from "./database/sessions";
 import { scheduleDailyBackup } from "./services/backup";
+import { logError } from "./logging";
 
 const purged = purgeOldSessions(SESSION_TTL_DAYS * 24 * 60 * 60 * 1000);
 
@@ -19,9 +20,9 @@ bot.launch(() => {
     console.log("🚀 Bot started");
 
     // Щодня о 1:00 UTC бот надсилає адміністратору стиснуту копію бази.
-    scheduleDailyBackup(bot.telegram, ADMIN_ID);
+    scheduleDailyBackup(ADMIN_ID);
 }).catch((err) => {
-    console.error("❌ Не вдалося запустити бота:", err);
+    logError("❌ Не вдалося запустити бота:", err);
     process.exit(1);
 });
 
