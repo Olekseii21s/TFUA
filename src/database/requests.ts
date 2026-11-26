@@ -90,3 +90,7 @@ export function getInteractedUserIds(
 
     return rows.map((row) => row.other);
 }
+
+export function countPendingRequests(): number {
+    return (db.prepare(`SELECT COUNT(*) AS c FROM requests WHERE status = 'pending'`).get() as { c: number }).c;
+}

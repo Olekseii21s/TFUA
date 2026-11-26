@@ -157,6 +157,27 @@ const migrations: Migration[] = [
                 last_notified_at INTEGER
             );
         `);
+    },
+
+    // 4 — активність гравців, «заблокував бота», дата анкети, джерело приходу (реклама).
+    (database) => {
+        tryExec(database, `ALTER TABLE users ADD COLUMN last_active_at INTEGER`);
+        tryExec(database, `ALTER TABLE users ADD COLUMN blocked_bot INTEGER NOT NULL DEFAULT 0`);
+        tryExec(database, `ALTER TABLE users ADD COLUMN created_at INTEGER`);
+        tryExec(database, `ALTER TABLE matches ADD COLUMN created_at INTEGER`);
+
+        // Наявним анкетам даємо «стартову» активність — щоб вони не зникли з пошуку одразу.
+        database.prepare(`UPDATE users SET last_active_at = ? WHERE last_active_at IS NULL`).run(Date.now());
+
+        database.exec(`
+            CREATE TABLE IF NOT EXISTS user_sources (
+                telegram_id INTEGER PRIMARY KEY,
+                source TEXT NOT NULL,
+                first_seen_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_users_active ON users (last_active_at);
+        `);
     }
 ];
 

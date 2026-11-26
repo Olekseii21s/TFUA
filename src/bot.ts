@@ -5,6 +5,7 @@ import { flowStore, searchStore } from "./state";
 import { allowAction, LIMITS } from "./services/rateLimit";
 import { isBanned } from "./database/bans";
 import { logError } from "./logging";
+import { touchUser } from "./database/users";
 import { registerStartHandlers } from "./handlers/start";
 import { registerProfileHandlers } from "./handlers/profile";
 import { registerSearchHandlers } from "./handlers/search";
@@ -38,6 +39,16 @@ export function createBot(token: string): Telegraf {
             }
 
             return;
+        }
+
+        return next();
+    });
+
+    // Гравець щось зробив: оновлюємо його username (міг змінитися в Telegram) і час активності.
+    // Так у матчах завжди актуальний контакт, а неактивні гравці зникають із пошуку.
+    bot.use(async (ctx, next) => {
+        if (ctx.from && !ctx.from.is_bot) {
+            touchUser(ctx.from.id, ctx.from.username);
         }
 
         return next();

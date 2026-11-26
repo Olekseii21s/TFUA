@@ -6,7 +6,8 @@ import { getUser, UserRecord } from "../database/users";
 import { getUserGames } from "../database/userGames";
 import { isBanned } from "../database/bans";
 import { getLastNotifiedAt, isNotifyEnabled, markNotified } from "../database/notifications";
-import { matchesPrefs, parseSearchPrefs } from "./search";
+import { isReachable, matchesPrefs, parseSearchPrefs } from "./search";
+import { sendToUser } from "./delivery";
 
 /** Не частіше одного сповіщення на 3 години на людину — щоб після реклами не було спаму. */
 export const NOTIFY_COOLDOWN_MS = 3 * 60 * 60 * 1000;
@@ -29,7 +30,8 @@ export function findUsersToNotify(newPlayer: UserRecord, now = Date.now()): numb
 
         const searcher = getUser(searcherId);
 
-        if (!searcher || !sameAgeGroup(searcher, newPlayer)) continue;
+        // Неактивним і тим, хто заблокував бота, не пишемо.
+        if (!searcher || !isReachable(searcher, now) || !sameAgeGroup(searcher, newPlayer)) continue;
 
         if (matchesPrefs(searcher, parseSearchPrefs(row), newPlayer, newPlayerGames)) {
             result.push(searcherId);
@@ -75,12 +77,7 @@ export function notifyAboutNewPlayer(telegram: Telegram, newPlayer: UserRecord):
             // Відмічаємо одразу: навіть якщо людина заблокувала бота, не пробуємо знову щохвилини.
             markNotified(recipientId);
 
-            try {
-                await telegram.sendMessage(recipientId, text, notificationKeyboard);
-                delivered++;
-            } catch {
-                // Користувач заблокував бота — пропускаємо.
-            }
+            if (await sendToUser(telegram, recipientId, text, notificationKeyboard)) delivered++;
 
             if (NOTIFY_DELAY.ms) await new Promise((resolve) => setTimeout(resolve, NOTIFY_DELAY.ms));
         }

@@ -28,7 +28,7 @@ test("нова схема накочується на базу старої ве
     const db = require("../src/database/db").default as Database.Database;
     console.log = log;
 
-    assert.equal(db.pragma("user_version", { simple: true }), 3);
+    assert.equal(db.pragma("user_version", { simple: true }), 4);
 
     const userRow = db.prepare("SELECT name, legacy_ranks, age FROM users WHERE telegram_id = 1").get();
     assert.deepEqual({ ...(userRow as object) }, { name: "Old User", legacy_ranks: "5 lvl", age: null });
@@ -36,12 +36,20 @@ test("нова схема накочується на базу старої ве
     const hidden = db.prepare("SELECT COUNT(*) AS c FROM hidden_profiles").get() as { c: number };
     assert.equal(hidden.c, 1, "дублікати прихованих анкет прибрано");
 
-    for (const table of ["sessions", "reports", "notification_settings", "search_preferences", "matches", "requests"]) {
+    // Наявні анкети отримали «стартову» активність, щоб не зникнути з пошуку одразу після оновлення.
+    const activity = db.prepare("SELECT last_active_at, blocked_bot FROM users WHERE telegram_id = 1").get() as {
+        last_active_at: number | null;
+        blocked_bot: number;
+    };
+    assert.ok(activity.last_active_at && activity.last_active_at > Date.now() - 60_000);
+    assert.equal(activity.blocked_bot, 0);
+
+    for (const table of ["sessions", "reports", "notification_settings", "user_sources", "search_preferences", "matches", "requests"]) {
         assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(table), `таблиця ${table}`);
     }
 
     // Повторний запуск міграцій нічого не ламає.
-    assert.equal(db.pragma("user_version", { simple: true }), 3);
+    assert.equal(db.pragma("user_version", { simple: true }), 4);
 
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

@@ -22,7 +22,7 @@ export async function showCurrentCandidate(ctx: Context, telegramId: number) {
     while (session && session.index < session.ids.length) {
         const candidate = getUser(session.ids[session.index]);
 
-        if (candidate && !isBanned(candidate.telegram_id)) {
+        if (candidate && !isBanned(candidate.telegram_id) && candidate.blocked_bot !== 1) {
             const left = session.ids.length - session.index;
 
             return ctx.reply(
@@ -31,7 +31,7 @@ export async function showCurrentCandidate(ctx: Context, telegramId: number) {
             );
         }
 
-        // Анкету видалили або забанили, поки користувач гортав.
+        // Анкету видалили, забанили або гравець заблокував бота, поки користувач гортав.
         session.index++;
     }
 

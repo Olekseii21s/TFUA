@@ -1,4 +1,4 @@
-import { BTN, SKIP_HIDE_DAYS } from "../constants";
+import { BTN, INACTIVE_DAYS, RECENT_DAYS, SKIP_HIDE_DAYS } from "../constants";
 import { allowedAgeRange } from "../domain/validation";
 import { rankMatches } from "../domain/ranks";
 import { shuffle } from "../utils";
@@ -73,30 +73,47 @@ export function matchesPrefs(
     });
 }
 
+const DAY = 24 * 60 * 60 * 1000;
+
 /**
- * ID анкет, які підходять під фільтри, у випадковому порядку.
- * Не показуємо: себе, забанених, тих, з ким уже був запит чи матч,
- * нещодавно пропущених, а також іншу вікову групу (діти/дорослі).
+ * Чи можна показувати гравця іншим: не заблокував бота і заходив за останні INACTIVE_DAYS днів.
+ * Неактивним ніхто не відповість — показувати їх означає марнувати запрошення.
  */
-export function findProfiles(searcher: UserRecord, prefs: SearchPrefs): number[] {
+export function isReachable(user: UserRecord, now = Date.now()): boolean {
+    if (user.blocked_bot === 1) return false;
+
+    return (user.last_active_at ?? 0) >= now - INACTIVE_DAYS * DAY;
+}
+
+/**
+ * ID анкет, які підходять під фільтри.
+ * Не показуємо: себе, забанених, тих, з ким уже був запит чи матч,
+ * нещодавно пропущених, неактивних і тих, хто заблокував бота,
+ * а також іншу вікову групу (діти/дорослі).
+ * Порядок: спершу активні за останні RECENT_DAYS днів, усередині груп — випадково.
+ */
+export function findProfiles(searcher: UserRecord, prefs: SearchPrefs, now = Date.now()): number[] {
     const searcherId = searcher.telegram_id;
 
     const excluded = new Set<number>([
         searcherId,
         ...getInteractedUserIds(searcherId),
         ...getMatchedUserIds(searcherId),
-        ...getRecentlyHiddenIds(searcherId, Date.now() - SKIP_HIDE_DAYS * 24 * 60 * 60 * 1000)
+        ...getRecentlyHiddenIds(searcherId, now - SKIP_HIDE_DAYS * DAY)
     ]);
 
     const gamesByUser = getAllUserGames();
+    const recentSince = now - RECENT_DAYS * DAY;
 
-    const ids = getAllUsers()
-        .filter((user) =>
-            !excluded.has(user.telegram_id) &&
-            !isBanned(user.telegram_id) &&
-            matchesPrefs(searcher, prefs, user, gamesByUser.get(user.telegram_id) || [])
-        )
-        .map((user) => user.telegram_id);
+    const candidates = getAllUsers().filter((user) =>
+        !excluded.has(user.telegram_id) &&
+        isReachable(user, now) &&
+        !isBanned(user.telegram_id) &&
+        matchesPrefs(searcher, prefs, user, gamesByUser.get(user.telegram_id) || [])
+    );
 
-    return shuffle(ids);
+    const recent = candidates.filter((u) => (u.last_active_at ?? 0) >= recentSince);
+    const older = candidates.filter((u) => (u.last_active_at ?? 0) < recentSince);
+
+    return [...shuffle(recent), ...shuffle(older)].map((user) => user.telegram_id);
 }

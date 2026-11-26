@@ -12,6 +12,7 @@ import { contactHtml, formatProfile, matchText } from "../ui/format";
 import { mainMenu } from "../ui/keyboards";
 import { removeButtons, requireProfile } from "./common";
 import { advanceSearch } from "./search";
+import { sendToUser } from "../services/delivery";
 
 /**
  * Надсилає картку вхідного запиту з кнопками «Прийняти / Відмовити».
@@ -145,17 +146,15 @@ export function registerRequestHandlers(bot: Telegraf) {
 
         createRequest(currentUserId, targetId);
 
-        try {
-            await ctx.telegram.sendMessage(
-                targetId,
-                "🔔 Вас запросили в гру!",
-                Markup.inlineKeyboard([
-                    [Markup.button.callback("👀 Переглянути", `request_from_${currentUserId}`)]
-                ])
-            );
-        } catch {
-            // Отримувач заблокував бота — запит лишається в розділі «📨 Запити».
-        }
+        // Якщо отримувач заблокував бота — запит лишається в «📨 Запити», а гравець зникає з пошуку.
+        await sendToUser(
+            ctx.telegram,
+            targetId,
+            "🔔 Вас запросили в гру!",
+            Markup.inlineKeyboard([
+                [Markup.button.callback("👀 Переглянути", `request_from_${currentUserId}`)]
+            ])
+        );
 
         await ctx.answerCbQuery("✅ Запит відправлено!");
         await removeButtons(ctx);
@@ -217,11 +216,8 @@ export function registerRequestHandlers(bot: Telegraf) {
             createMatch(senderId, currentUserId);
         }
 
-        try {
-            await ctx.telegram.sendMessage(senderId, matchText(currentProfile), { parse_mode: "HTML" });
-        } catch {
-            // Відправник заблокував бота — контакт все одно отримає той, хто прийняв.
-        }
+        // Якщо відправник заблокував бота — контакт все одно отримає той, хто прийняв.
+        await sendToUser(ctx.telegram, senderId, matchText(currentProfile), { parse_mode: "HTML" });
 
         await ctx.answerCbQuery("🎉 Запит прийнято!");
         await ctx.reply(matchText(senderProfile), { parse_mode: "HTML", ...mainMenu(currentUserId) });

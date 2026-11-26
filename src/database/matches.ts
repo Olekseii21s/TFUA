@@ -5,9 +5,9 @@ export function createMatch(
     user2: number
 ) {
     db.prepare(`
-        INSERT INTO matches (user1, user2)
-        VALUES (?, ?)
-    `).run(user1, user2);
+        INSERT INTO matches (user1, user2, created_at)
+        VALUES (?, ?, ?)
+    `).run(user1, user2, Date.now());
 }
 
 export function hasMatch(
@@ -36,6 +36,8 @@ export function getMatchedUserIds(
     return [...new Set(rows.map((row) => row.other))];
 }
 
-export function countMatches(): number {
-    return (db.prepare(`SELECT COUNT(*) AS c FROM matches`).get() as { c: number }).c;
+export function countMatches(sinceMs = 0): number {
+    return (db.prepare(`
+        SELECT COUNT(*) AS c FROM matches WHERE COALESCE(created_at, 0) >= ?
+    `).get(sinceMs) as { c: number }).c;
 }

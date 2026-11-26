@@ -9,6 +9,8 @@ export const deleteUser = db.transaction((telegramId: number) => {
 
     db.prepare(`DELETE FROM search_preferences WHERE telegram_id = ?`).run(telegramId);
 
+    db.prepare(`DELETE FROM user_sources WHERE telegram_id = ?`).run(telegramId);
+
     db.prepare(`
         DELETE FROM requests
         WHERE from_user = ? OR to_user = ?

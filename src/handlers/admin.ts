@@ -2,10 +2,13 @@ import { Context, Markup, Telegraf } from "telegraf";
 import { ADMIN_ID, CHANNEL_ID } from "../config";
 import { flowStore, newState, searchStore } from "../state";
 import { banUser, unbanUser } from "../database/bans";
-import { getAllUsers } from "../database/users";
+import { getAllUsers, getUserStats } from "../database/users";
 import { countMatches } from "../database/matches";
+import { countPendingRequests } from "../database/requests";
+import { getSourceStats } from "../database/sources";
 import { mainMenu, stepKeyboard } from "../ui/keyboards";
 import { sendBackup } from "../services/backup";
+import { sendToUser } from "../services/delivery";
 import { logError } from "../logging";
 
 async function backupNow(ctx: Context) {
@@ -15,6 +18,33 @@ async function backupNow(ctx: Context) {
         logError("❌ Не вдалося зробити бекап:", err);
         await ctx.reply("⚠️ Не вдалося зробити бекап. Деталі — у логах сервера.");
     }
+}
+
+/** Текст статистики для адміна: анкети, активність, матчі, джерела трафіку за 30 днів. */
+export function buildStatsText(now = Date.now()): string {
+    const users = getUserStats(now);
+    const week = now - 7 * 24 * 60 * 60 * 1000;
+    const month = now - 30 * 24 * 60 * 60 * 1000;
+
+    const sources = getSourceStats(month);
+    const sourcesText = sources.length
+        ? sources.map((s) => `• ${s.source}: ${s.visitors} → анкет ${s.profiles}`).join("\n")
+        : "• поки немає даних";
+
+    return `📊 Статистика
+
+👥 Анкет: ${users.total}
+🆕 Нових: ${users.newLastDay} за добу · ${users.newLastWeek} за тиждень
+🟢 Активних: ${users.activeLastDay} за добу · ${users.activeLastWeek} за тиждень
+🚫 Заблокували бота: ${users.blockedBot}
+
+🤝 Матчів: ${countMatches()} (за тиждень: ${countMatches(week)})
+📨 Запитів без відповіді: ${countPendingRequests()}
+
+📣 Звідки прийшли (30 днів, перший /start):
+${sourcesText}
+
+Посилання з міткою: t.me/<бот>?start=tiktok`;
 }
 
 function parseUserIdArg(text: string): number | null {
@@ -34,12 +64,8 @@ export async function handleBroadcast(ctx: Context, text: string) {
     let delivered = 0;
 
     for (const user of users) {
-        try {
-            await ctx.telegram.sendMessage(user.telegram_id, `📢 Оголошення\n\n${text}`);
-            delivered++;
-        } catch {
-            // Користувач заблокував бота або видалив акаунт.
-        }
+        // Заблокували бота — sendToUser позначить це, і такі гравці зникнуть із пошуку.
+        if (await sendToUser(ctx.telegram, user.telegram_id, `📢 Оголошення\n\n${text}`)) delivered++;
 
         // Telegram обмежує ~30 повідомлень/сек — не перевищуємо ліміт.
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -111,10 +137,13 @@ export function registerAdminHandlers(bot: Telegraf) {
 
         await ctx.answerCbQuery();
 
-        return ctx.reply(`📊 Статистика
+        return ctx.reply(buildStatsText());
+    });
 
-👥 Анкет: ${getAllUsers().length}
-🤝 Матчів: ${countMatches()}`);
+    bot.command("stats", async (ctx) => {
+        if (ctx.from.id !== ADMIN_ID) return;
+
+        return ctx.reply(buildStatsText());
     });
 
     bot.action("admin_users", async (ctx) => {
