@@ -3,10 +3,9 @@ import db from "./db";
 /** Ховає анкету з пошуку користувача (кнопка «Пропустити»). Повторний виклик оновлює час. */
 export function hideProfile(
     userId: number,
-    hiddenUserId: number
+    hiddenUserId: number,
+    now = Date.now()
 ) {
-    const now = Date.now();
-
     const updated = db.prepare(`
         UPDATE hidden_profiles
         SET created_at = ?

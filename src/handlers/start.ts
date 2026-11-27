@@ -1,5 +1,5 @@
 import { Telegraf } from "telegraf";
-import { BTN } from "../constants";
+import { BTN, REQUEST_TTL_DAYS } from "../constants";
 import { flowStore } from "../state";
 import { getUser } from "../database/users";
 import { recordSource } from "../database/sources";
@@ -24,12 +24,14 @@ export const HELP_TEXT = `ℹ️ Як користуватися Team Finder
 ${BTN.profile} — переглянути та змінити анкету (ігри, ранги, вік, опис)
 ${BTN.search} — гортати анкети гравців під твої фільтри
 ${BTN.filters} — які ігри, ранги, стать і вік шукаєш
-${BTN.requests} — запрошення від інших гравців
-${BTN.teammates} — гравці, з якими у вас матч, та їхні контакти
+${BTN.requests} — вхідні запрошення і ваші надіслані (їх можна скасувати)
+${BTN.teammates} — гравці, з якими у вас матч, та їхні контакти (можна прибрати когось зі списку)
 ${BTN.bug} — написати адміністратору
 
 🎮 Запросив гравця → він погодився → ви обоє отримуєте контакти одне одного.
 🔔 Коли з'являється новий гравець під твої фільтри — бот надішле сповіщення (не частіше ніж раз на 3 години).
+⌛ Запрошення без відповіді згорають через ${REQUEST_TTL_DAYS} днів.
+⏸ Знайшов команду? «${BTN.profile}» → «${BTN.pauseProfile}» — і анкета зникне з пошуку, доки не покажеш її знову.
 
 /privacy — які дані зберігає бот і як їх видалити`;
 

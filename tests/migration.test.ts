@@ -28,7 +28,7 @@ test("нова схема накочується на базу старої ве
     const db = require("../src/database/db").default as Database.Database;
     console.log = log;
 
-    assert.equal(db.pragma("user_version", { simple: true }), 4);
+    assert.equal(db.pragma("user_version", { simple: true }), 5);
 
     const userRow = db.prepare("SELECT name, legacy_ranks, age FROM users WHERE telegram_id = 1").get();
     assert.deepEqual({ ...(userRow as object) }, { name: "Old User", legacy_ranks: "5 lvl", age: null });
@@ -44,12 +44,19 @@ test("нова схема накочується на базу старої ве
     assert.ok(activity.last_active_at && activity.last_active_at > Date.now() - 60_000);
     assert.equal(activity.blocked_bot, 0);
 
-    for (const table of ["sessions", "reports", "notification_settings", "user_sources", "search_preferences", "matches", "requests"]) {
+    // Анкета не на паузі, старі запити отримали дату (повні 7 днів до згорання).
+    const pausedRow = db.prepare("SELECT paused FROM users WHERE telegram_id = 1").get() as { paused: number };
+    assert.equal(pausedRow.paused, 0);
+
+    const requestColumns = (db.prepare("PRAGMA table_info(requests)").all() as { name: string }[]).map((c) => c.name);
+    assert.ok(requestColumns.includes("created_at"));
+
+    for (const table of ["sessions", "reports", "notification_settings", "user_sources", "hidden_teammates", "search_preferences", "matches", "requests"]) {
         assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(table), `таблиця ${table}`);
     }
 
     // Повторний запуск міграцій нічого не ламає.
-    assert.equal(db.pragma("user_version", { simple: true }), 4);
+    assert.equal(db.pragma("user_version", { simple: true }), 5);
 
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

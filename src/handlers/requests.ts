@@ -1,18 +1,30 @@
 import { Context, Markup, Telegraf } from "telegraf";
-import { BTN } from "../constants";
+import { BTN, REQUEST_TTL_DAYS } from "../constants";
 import { sameAgeGroup } from "../domain/validation";
 import { escapeHtml } from "../utils";
 import { allowAction, LIMITS } from "../services/rateLimit";
+import { isReachable } from "../services/search";
+import { sendToUser } from "../services/delivery";
 import { getUser, UserRecord } from "../database/users";
 import { getUserGames } from "../database/userGames";
 import { isBanned } from "../database/bans";
-import { createRequest, getPendingRequest, getRequests, updateRequestStatus } from "../database/requests";
-import { createMatch, getMatchedUserIds, hasMatch } from "../database/matches";
-import { contactHtml, formatProfile, matchText } from "../ui/format";
+import { hideProfile } from "../database/hiddenProfiles";
+import {
+    cancelRequest,
+    countSentPendingRequests,
+    createRequest,
+    getPendingRequest,
+    getRequests,
+    getSentPendingRequests,
+    updateRequestStatus
+} from "../database/requests";
+import { createMatch, getVisibleTeammateIds, hasMatch, hideTeammate } from "../database/matches";
+import { contactHtml, formatAgo, formatProfile, formatTimeLeft, matchText } from "../ui/format";
 import { mainMenu } from "../ui/keyboards";
 import { removeButtons, requireProfile } from "./common";
 import { advanceSearch } from "./search";
-import { sendToUser } from "../services/delivery";
+
+const DAY = 24 * 60 * 60 * 1000;
 
 /**
  * Надсилає картку вхідного запиту з кнопками «Прийняти / Відмовити».
@@ -57,22 +69,92 @@ async function showNextPendingRequest(ctx: Context): Promise<boolean> {
     return false;
 }
 
+/** Список надісланих запрошень, що чекають відповіді, з кнопками «Скасувати». */
+function sentRequestsView(userId: number, now = Date.now()) {
+    const sent = getSentPendingRequests(userId)
+        .map((request) => ({ request, target: getUser(request.to_user) }))
+        .filter((item): item is { request: typeof item.request; target: UserRecord } => !!item.target);
+
+    if (!sent.length) {
+        return { text: "📤 Надісланих запрошень без відповіді немає.", keyboard: undefined };
+    }
+
+    const lines = sent.map(({ request, target }, i) => {
+        const createdAt = request.created_at ?? now;
+        const expiresAt = createdAt + REQUEST_TTL_DAYS * DAY;
+
+        return `${i + 1}. 👤 ${target.name} — надіслано ${formatAgo(now - createdAt)}, згорить ${formatTimeLeft(expiresAt - now)}`;
+    });
+
+    const text = `📤 Надіслані запрошення (чекають відповіді)
+
+${lines.join("\n")}
+
+Запрошення без відповіді згорають через ${REQUEST_TTL_DAYS} днів. Скасоване запрошення зникає в гравця з «📨 Запити».`;
+
+    const keyboard = Markup.inlineKeyboard(
+        sent.map(({ request, target }) => [Markup.button.callback(`❌ Скасувати: ${target.name}`, `cancel_req_${request.id}`)])
+    );
+
+    return { text, keyboard };
+}
+
 export function registerRequestHandlers(bot: Telegraf) {
 
     bot.hears(/^📨 Запити/, async (ctx) => {
         if (!requireProfile(ctx)) return;
 
+        const sentCount = countSentPendingRequests(ctx.from.id);
+
+        if (sentCount) {
+            await ctx.reply(
+                `📤 Ваші запрошення без відповіді: ${sentCount}`,
+                Markup.inlineKeyboard([[Markup.button.callback(`📤 Надіслані запрошення (${sentCount})`, "sent_requests")]])
+            );
+        }
+
         const shown = await showNextPendingRequest(ctx);
 
         if (!shown) {
-            return ctx.reply("📭 Нових запитів немає.", mainMenu(ctx.from.id));
+            return ctx.reply(sentCount ? "📭 Нових вхідних запитів немає." : "📭 Нових запитів немає.", mainMenu(ctx.from.id));
+        }
+    });
+
+    bot.action("sent_requests", async (ctx) => {
+        await ctx.answerCbQuery();
+
+        const view = sentRequestsView(ctx.from.id);
+
+        return ctx.reply(view.text, view.keyboard ?? {});
+    });
+
+    bot.action(/^cancel_req_(\d+)$/, async (ctx) => {
+        // Скасувати можна лише СВОЄ запрошення, що ще чекає відповіді.
+        const cancelled = cancelRequest(Number(ctx.match[1]), ctx.from.id);
+
+        if (!cancelled) {
+            await ctx.answerCbQuery("Цей запит уже оброблено");
+            return;
+        }
+
+        // Щоб одразу не натрапити на цього гравця в пошуку знову.
+        hideProfile(ctx.from.id, cancelled.to_user);
+
+        await ctx.answerCbQuery("❌ Запрошення скасовано");
+
+        const view = sentRequestsView(ctx.from.id);
+
+        try {
+            await ctx.editMessageText(view.text, view.keyboard ?? {});
+        } catch {
+            await ctx.reply(view.text, view.keyboard ?? {});
         }
     });
 
     bot.hears(BTN.teammates, async (ctx) => {
         if (!requireProfile(ctx)) return;
 
-        const teammates = getMatchedUserIds(ctx.from.id)
+        const teammates = getVisibleTeammateIds(ctx.from.id)
             .map((id) => getUser(id))
             .filter((u): u is UserRecord => !!u)
             .slice(0, 30);
@@ -92,7 +174,60 @@ export function registerRequestHandlers(bot: Telegraf) {
             })
             .join("\n\n");
 
-        return ctx.reply(`🤝 Ваші тімейти:\n\n${list}`, { parse_mode: "HTML", ...mainMenu(ctx.from.id) });
+        // Кнопки «Прибрати» — під списком (головне меню лишається з попереднього повідомлення).
+        return ctx.reply(`🤝 Ваші тімейти:\n\n${list}`, {
+            parse_mode: "HTML",
+            ...Markup.inlineKeyboard(
+                teammates.map((u) => [Markup.button.callback(`❌ Прибрати: ${u.name}`, `tm_rm_${u.telegram_id}`)])
+            )
+        });
+    });
+
+    bot.action(/^tm_rm_(\d+)$/, async (ctx) => {
+        const teammateId = Number(ctx.match[1]);
+        const teammate = getUser(teammateId);
+
+        if (!teammate || !getVisibleTeammateIds(ctx.from.id).includes(teammateId)) {
+            await ctx.answerCbQuery("Цього гравця вже немає у вашому списку");
+            return;
+        }
+
+        await ctx.answerCbQuery();
+
+        return ctx.reply(
+            `Прибрати «${teammate.name}» зі свого списку тімейтів?
+
+• гравець нічого не отримає, у його списку ви залишитесь
+• у пошуку ви одне одного не побачите`,
+            Markup.inlineKeyboard([
+                [
+                    Markup.button.callback("✅ Так, прибрати", `tm_rm_yes_${teammateId}`),
+                    Markup.button.callback("❌ Ні", "tm_rm_no")
+                ]
+            ])
+        );
+    });
+
+    bot.action(/^tm_rm_yes_(\d+)$/, async (ctx) => {
+        const teammateId = Number(ctx.match[1]);
+
+        await removeButtons(ctx);
+
+        if (!hasMatch(ctx.from.id, teammateId) || !getVisibleTeammateIds(ctx.from.id).includes(teammateId)) {
+            await ctx.answerCbQuery("Цього гравця вже немає у вашому списку");
+            return;
+        }
+
+        hideTeammate(ctx.from.id, teammateId);
+
+        await ctx.answerCbQuery("Прибрано");
+
+        return ctx.reply(`✅ «${getUser(teammateId)?.name ?? "Гравця"}» прибрано зі списку тімейтів.`, mainMenu(ctx.from.id));
+    });
+
+    bot.action("tm_rm_no", async (ctx) => {
+        await removeButtons(ctx);
+        await ctx.answerCbQuery("Скасовано");
     });
 
     bot.action(/^like_(\d+)$/, async (ctx) => {
@@ -139,6 +274,14 @@ export function registerRequestHandlers(bot: Telegraf) {
             return;
         }
 
+        // Анкета на паузі, давно неактивна або гравець заблокував бота — запрошення ніхто не побачить.
+        if (!isReachable(targetProfile)) {
+            await ctx.answerCbQuery("❌ Гравець зараз не шукає тімейтів");
+            await removeButtons(ctx);
+            await advanceSearch(ctx, targetId);
+            return;
+        }
+
         if (!allowAction(`invite:${currentUserId}`, LIMITS.invite)) {
             await ctx.answerCbQuery("⏳ Забагато запрошень за годину. Спробуйте пізніше.", { show_alert: true });
             return;
@@ -159,7 +302,9 @@ export function registerRequestHandlers(bot: Telegraf) {
         await ctx.answerCbQuery("✅ Запит відправлено!");
         await removeButtons(ctx);
 
-        await ctx.reply("✅ Запит відправлено! Коли гравець погодиться, ви отримаєте його контакт.");
+        await ctx.reply(
+            `✅ Запит відправлено! Коли гравець погодиться, ви отримаєте його контакт.\n\nЯкщо він не відповість за ${REQUEST_TTL_DAYS} днів, запрошення згорить. Свої запрошення видно в «${BTN.requests}».`
+        );
 
         await advanceSearch(ctx, targetId);
     });

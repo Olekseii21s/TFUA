@@ -13,6 +13,8 @@ export interface UserRecord {
     /** 1 — Telegram відповів, що гравець заблокував бота. */
     blocked_bot: number;
     created_at: number | null;
+    /** 1 — гравець приховав анкету (пауза): його не видно в пошуку і запросити не можна. */
+    paused: number;
 }
 
 export type EditableUserField = "name" | "games" | "age" | "gender" | "about";
@@ -25,7 +27,7 @@ const editableColumns: Record<EditableUserField, string> = {
     about: "about"
 };
 
-const COLUMNS = "telegram_id, username, name, games, age, gender, about, last_active_at, blocked_bot, created_at";
+const COLUMNS = "telegram_id, username, name, games, age, gender, about, last_active_at, blocked_bot, created_at, paused";
 
 const saveUserStatement = db.prepare(`
     INSERT INTO users
@@ -105,6 +107,11 @@ export function setBlockedBot(telegramId: number, blocked: boolean): void {
     db.prepare(`UPDATE users SET blocked_bot = ? WHERE telegram_id = ?`).run(blocked ? 1 : 0, telegramId);
 }
 
+/** Пауза анкети: прихована — не видно в пошуку, не приходять сповіщення, запросити не можна. */
+export function setPaused(telegramId: number, paused: boolean): void {
+    db.prepare(`UPDATE users SET paused = ? WHERE telegram_id = ?`).run(paused ? 1 : 0, telegramId);
+}
+
 /** Telegram відповів 403 — гравець заблокував бота, у пошуку його більше не показуємо. */
 export function markBlockedBot(telegramId: number): void {
     setBlockedBot(telegramId, true);
@@ -117,6 +124,7 @@ export interface UserStats {
     activeLastDay: number;
     activeLastWeek: number;
     blockedBot: number;
+    paused: number;
 }
 
 export function getUserStats(now = Date.now()): UserStats {
@@ -130,7 +138,8 @@ export function getUserStats(now = Date.now()): UserStats {
             COALESCE(SUM(created_at >= @week), 0) AS newLastWeek,
             COALESCE(SUM(last_active_at >= @day), 0) AS activeLastDay,
             COALESCE(SUM(last_active_at >= @week), 0) AS activeLastWeek,
-            COALESCE(SUM(blocked_bot = 1), 0) AS blockedBot
+            COALESCE(SUM(blocked_bot = 1), 0) AS blockedBot,
+            COALESCE(SUM(paused = 1), 0) AS paused
         FROM users
     `).get({ day, week }) as UserStats;
 }

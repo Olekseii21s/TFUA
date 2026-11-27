@@ -24,11 +24,13 @@ export function mainMenu(telegramId: number) {
     ]).resize();
 }
 
-export function profileMenu() {
+/** Меню анкети. Кнопка паузи показує дію, протилежну поточному стану. */
+export function profileMenu(paused = false) {
     return Markup.keyboard([
         [BTN.editName, BTN.editAge],
         [BTN.editGender, BTN.editAbout],
         [BTN.editGames],
+        [paused ? BTN.resumeProfile : BTN.pauseProfile],
         [BTN.deleteProfile],
         [BTN.back]
     ]).resize();

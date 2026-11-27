@@ -54,3 +54,22 @@ export function describePrefs(prefs: SearchPrefs): string {
 
     return `🎮 Ігри: ${games}\n👤 Стать: ${prefs.gender}\n🎂 Вік: ${prefs.minAge}–${prefs.maxAge}`;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** «сьогодні», «вчора», «3 дн. тому». */
+export function formatAgo(ms: number): string {
+    const days = Math.floor(Math.max(0, ms) / DAY_MS);
+
+    if (days === 0) return "сьогодні";
+    if (days === 1) return "вчора";
+
+    return `${days} дн. тому`;
+}
+
+/** «через 5 дн.» або «менш ніж за добу». */
+export function formatTimeLeft(ms: number): string {
+    if (ms <= DAY_MS) return "менш ніж за добу";
+
+    return `через ${Math.ceil(ms / DAY_MS)} дн.`;
+}

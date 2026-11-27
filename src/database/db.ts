@@ -178,6 +178,26 @@ const migrations: Migration[] = [
 
             CREATE INDEX IF NOT EXISTS idx_users_active ON users (last_active_at);
         `);
+    },
+
+    // 5 — термін дії запитів, пауза анкети, приховані зі свого списку тімейти.
+    (database) => {
+        tryExec(database, `ALTER TABLE requests ADD COLUMN created_at INTEGER`);
+        tryExec(database, `ALTER TABLE users ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`);
+
+        // Наявні запити отримують повні 7 днів від оновлення, а не згорають одразу.
+        database.prepare(`UPDATE requests SET created_at = ? WHERE created_at IS NULL`).run(Date.now());
+
+        database.exec(`
+            CREATE TABLE IF NOT EXISTS hidden_teammates (
+                user_id INTEGER NOT NULL,
+                teammate_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, teammate_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_requests_pending_age ON requests (status, created_at);
+        `);
     }
 ];
 

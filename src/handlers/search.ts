@@ -3,7 +3,7 @@ import { BTN, GAME_RANKS } from "../constants";
 import { allowedAgeRange, isMinor, parseAgeRange } from "../domain/validation";
 import { rankWindow } from "../domain/ranks";
 import { FlowState, flowStore, newState, searchStore } from "../state";
-import { findProfiles, loadSearchPrefs, SearchPrefs } from "../services/search";
+import { findProfiles, isReachable, loadSearchPrefs, SearchPrefs } from "../services/search";
 import { getUser, UserRecord } from "../database/users";
 import { isBanned } from "../database/bans";
 import { hideProfile } from "../database/hiddenProfiles";
@@ -22,7 +22,7 @@ export async function showCurrentCandidate(ctx: Context, telegramId: number) {
     while (session && session.index < session.ids.length) {
         const candidate = getUser(session.ids[session.index]);
 
-        if (candidate && !isBanned(candidate.telegram_id) && candidate.blocked_bot !== 1) {
+        if (candidate && !isBanned(candidate.telegram_id) && isReachable(candidate)) {
             const left = session.ids.length - session.index;
 
             return ctx.reply(
@@ -31,7 +31,7 @@ export async function showCurrentCandidate(ctx: Context, telegramId: number) {
             );
         }
 
-        // Анкету видалили, забанили або гравець заблокував бота, поки користувач гортав.
+        // Анкету видалили, забанили, поставили на паузу або гравець заблокував бота, поки користувач гортав.
         session.index++;
     }
 
@@ -217,6 +217,12 @@ async function startSearch(ctx: Context) {
     if (!profile) return;
 
     flowStore.delete(ctx.from!.id);
+
+    if (profile.paused === 1) {
+        await ctx.reply(
+            `⏸ Ваша анкета прихована — інші гравці вас не бачать і не можуть запросити.\nПоказати її: «${BTN.profile}» → «${BTN.resumeProfile}».`
+        );
+    }
 
     const prefs = loadSearchPrefs(ctx.from!.id);
 

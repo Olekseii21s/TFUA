@@ -11,7 +11,7 @@ import {
 } from "../constants";
 import { AGE_ERROR, parseAge, validateText } from "../domain/validation";
 import { FlowState, flowStore, newState, searchStore } from "../state";
-import { getUser, saveUser, updateField } from "../database/users";
+import { getUser, saveUser, setPaused, updateField } from "../database/users";
 import { getUserGames, replaceUserGames } from "../database/userGames";
 import { deleteUser } from "../database/deleteUser";
 import { formatProfile } from "../ui/format";
@@ -26,9 +26,14 @@ export async function showOwnProfile(ctx: Context, title = "👤 Ваша анк
         return startRegistration(ctx);
     }
 
+    const paused = profile.paused === 1;
+    const pausedNote = paused
+        ? `⏸ Анкета прихована — у пошуку її не видно. Показати знову: «${BTN.resumeProfile}».\n\n`
+        : "";
+
     return ctx.reply(
-        `${formatProfile(profile, title)}\n\n✏️ Щоб щось змінити — оберіть кнопку нижче.`,
-        profileMenu()
+        `${formatProfile(profile, title)}\n\n${pausedNote}✏️ Щоб щось змінити — оберіть кнопку нижче.`,
+        profileMenu(paused)
     );
 }
 
@@ -297,6 +302,33 @@ export function registerProfileHandlers(bot: Telegraf) {
             `🎮 Оберіть ігри (до ${MAX_PROFILE_GAMES}). Натисніть на гру ще раз, щоб прибрати її.\nПотім — «${BTN.done}», і бот попросить ранг для кожної гри.`,
             gamesKeyboard(current)
         );
+    });
+
+    bot.hears(BTN.pauseProfile, async (ctx) => {
+        if (!requireProfile(ctx)) return;
+
+        flowStore.delete(ctx.from.id);
+        setPaused(ctx.from.id, true);
+
+        return ctx.reply(
+            `⏸ Анкету приховано.
+
+• інші гравці не бачать її в пошуку і не можуть вас запросити
+• сповіщення про нових гравців не приходитимуть
+• ваші запити й тімейти залишаються
+
+Показати анкету знову — «${BTN.resumeProfile}».`,
+            profileMenu(true)
+        );
+    });
+
+    bot.hears(BTN.resumeProfile, async (ctx) => {
+        if (!requireProfile(ctx)) return;
+
+        flowStore.delete(ctx.from.id);
+        setPaused(ctx.from.id, false);
+
+        return ctx.reply("▶️ Анкета знову видна в пошуку. Гарної гри!", profileMenu(false));
     });
 
     bot.hears(BTN.deleteProfile, async (ctx) => {

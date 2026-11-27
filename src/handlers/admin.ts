@@ -39,6 +39,7 @@ export function buildStatsText(now = Date.now()): string {
 🆕 Нових: ${users.newLastDay} за добу · ${users.newLastWeek} за тиждень
 🟢 Активних: ${users.activeLastDay} за добу · ${users.activeLastWeek} за тиждень
 🚫 Заблокували бота: ${users.blockedBot}
+⏸ Приховали анкету: ${users.paused}
 
 🤝 Матчів: ${countMatches()} (за тиждень: ${countMatches(week)})
 📨 Запитів без відповіді: ${countPendingRequests()}

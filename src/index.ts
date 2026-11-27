@@ -7,6 +7,7 @@ import { createBot } from "./bot";
 import { purgeOldSessions } from "./database/sessions";
 import { scheduleDailyBackup } from "./services/backup";
 import { setupBotProfile } from "./services/botProfile";
+import { scheduleRequestExpiry } from "./services/requestExpiry";
 import { logError } from "./logging";
 
 const purged = purgeOldSessions(SESSION_TTL_DAYS * 24 * 60 * 60 * 1000);
@@ -25,6 +26,9 @@ bot.launch(() => {
 
     // Меню команд і опис бота (опис — лише якщо порожній у @BotFather).
     void setupBotProfile(bot.telegram, ADMIN_ID);
+
+    // Запрошення без відповіді згорають через 7 днів — перевірка зараз і щогодини.
+    scheduleRequestExpiry(bot.telegram);
 }).catch((err) => {
     logError("❌ Не вдалося запустити бота:", err);
     process.exit(1);

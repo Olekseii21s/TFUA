@@ -23,6 +23,8 @@ export const BTN = {
     editAbout: "📄 Про себе",
     editGames: "🎮 Ігри та ранги",
     deleteProfile: "🗑 Видалити анкету",
+    pauseProfile: "⏸ Приховати анкету",
+    resumeProfile: "▶️ Показати анкету",
     // Кнопки старих версій бота, які ще можуть лишатися в чатах користувачів.
     legacyEditProfile: "✏️ Редагувати анкету",
     legacyEditSearch: "✏️ Редагувати пошук"
@@ -49,6 +51,9 @@ export const INACTIVE_DAYS = 30;
 
 /** Гравці, активні за останні N днів, показуються в пошуку першими. */
 export const RECENT_DAYS = 3;
+
+/** Через скільки днів запрошення без відповіді згорає. */
+export const REQUEST_TTL_DAYS = 7;
 
 /** Через скільки днів забувати незавершений діалог або видачу пошуку. */
 export const SESSION_TTL_DAYS = 7;

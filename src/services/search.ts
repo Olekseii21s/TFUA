@@ -77,11 +77,15 @@ export function matchesPrefs(
 const DAY = 24 * 60 * 60 * 1000;
 
 /**
- * Чи можна показувати гравця іншим: не заблокував бота і заходив за останні INACTIVE_DAYS днів.
+ * Чи можна показувати гравця іншим: не заблокував бота, анкета не на паузі
+ * і заходив за останні INACTIVE_DAYS днів.
  * Неактивним ніхто не відповість — показувати їх означає марнувати запрошення.
  */
 export function isReachable(user: UserRecord, now = Date.now()): boolean {
     if (user.blocked_bot === 1) return false;
+
+    // Анкета на паузі: гравець зараз не шукає тімейтів.
+    if (user.paused === 1) return false;
 
     return (user.last_active_at ?? 0) >= now - INACTIVE_DAYS * DAY;
 }
