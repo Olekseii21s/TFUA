@@ -12,6 +12,8 @@ export interface FlowState {
     gender?: string;
     field?: "name" | "age" | "gender" | "about";
     targetId?: number;
+    /** Чернетка розсилки, яка чекає підтвердження адміна. */
+    draft?: string;
 }
 
 /** Поточна видача пошуку: список ID анкет і яка зараз показана. */

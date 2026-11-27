@@ -1,7 +1,7 @@
-import { Context, Markup, Telegraf } from "telegraf";
+import { Context, Markup, Telegraf, Telegram } from "telegraf";
 import { ADMIN_ID, CHANNEL_ID } from "../config";
-import { flowStore, newState, searchStore } from "../state";
-import { banUser, unbanUser } from "../database/bans";
+import { FlowState, flowStore, newState, searchStore } from "../state";
+import { banUser, isBanned, unbanUser } from "../database/bans";
 import { getAllUsers, getUserStats } from "../database/users";
 import { countMatches } from "../database/matches";
 import { countPendingRequests } from "../database/requests";
@@ -9,7 +9,9 @@ import { getSourceStats } from "../database/sources";
 import { mainMenu, stepKeyboard } from "../ui/keyboards";
 import { sendBackup } from "../services/backup";
 import { sendToUser } from "../services/delivery";
+import { runInBackground } from "../services/background";
 import { logError } from "../logging";
+import { removeButtons } from "./common";
 
 async function backupNow(ctx: Context) {
     try {
@@ -53,25 +55,75 @@ function parseUserIdArg(text: string): number | null {
     return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-export async function handleBroadcast(ctx: Context, text: string) {
+/** Максимальна довжина тексту розсилки (ліміт Telegram — 4096 символів разом із заголовком). */
+const BROADCAST_MAX_LENGTH = 4000;
+
+/** Пауза між повідомленнями розсилки (ліміт Telegram ~30 повідомлень/сек). */
+export const BROADCAST_DELAY = { ms: 50 };
+
+const broadcastMessage = (text: string) => `📢 Оголошення\n\n${text}`;
+
+/** Кому піде розсилка: усі анкети, крім забанених і тих, хто заблокував бота. */
+function broadcastRecipients(): number[] {
+    return getAllUsers()
+        .filter((u) => u.blocked_bot !== 1 && !isBanned(u.telegram_id))
+        .map((u) => u.telegram_id);
+}
+
+let broadcastInProgress = false;
+
+/** Крок 1: адмін надіслав текст — показуємо, як виглядатиме розсилка, і просимо підтвердити. */
+export async function handleBroadcast(ctx: Context, state: FlowState, text: string) {
     const telegramId = ctx.from!.id;
 
-    flowStore.delete(telegramId);
-
-    if (telegramId !== ADMIN_ID) return;
-
-    const users = getAllUsers();
-    let delivered = 0;
-
-    for (const user of users) {
-        // Заблокували бота — sendToUser позначить це, і такі гравці зникнуть із пошуку.
-        if (await sendToUser(ctx.telegram, user.telegram_id, `📢 Оголошення\n\n${text}`)) delivered++;
-
-        // Telegram обмежує ~30 повідомлень/сек — не перевищуємо ліміт.
-        await new Promise((resolve) => setTimeout(resolve, 50));
+    if (telegramId !== ADMIN_ID) {
+        flowStore.delete(telegramId);
+        return;
     }
 
-    return ctx.reply(`✅ Розсилку доставлено ${delivered} з ${users.length} користувачів`, mainMenu(telegramId));
+    if (!text.trim()) return ctx.reply("❌ Текст розсилки порожній. Введіть текст:");
+
+    if (text.length > BROADCAST_MAX_LENGTH) {
+        return ctx.reply(`❌ Задовгий текст: ${text.length} символів, максимум ${BROADCAST_MAX_LENGTH}. Скоротіть і надішліть ще раз:`);
+    }
+
+    state.draft = text;
+
+    await ctx.reply("👀 Так виглядатиме розсилка:");
+    await ctx.reply(broadcastMessage(text));
+
+    return ctx.reply(
+        `Надіслати її ${broadcastRecipients().length} користувачам?`,
+        Markup.inlineKeyboard([
+            [
+                Markup.button.callback("✅ Надіслати", "broadcast_send"),
+                Markup.button.callback("❌ Скасувати", "broadcast_cancel")
+            ]
+        ])
+    );
+}
+
+/** Крок 2: відправка у фоні, щоб бот не «замовкав» для всіх на час розсилки. */
+function startBroadcast(telegram: Telegram, adminId: number, text: string): Promise<void> {
+    broadcastInProgress = true;
+
+    return runInBackground("розсилка", async () => {
+        try {
+            const recipients = broadcastRecipients();
+            let delivered = 0;
+
+            for (const userId of recipients) {
+                // Заблокували бота — sendToUser позначить це, і такі гравці зникнуть із пошуку.
+                if (await sendToUser(telegram, userId, broadcastMessage(text))) delivered++;
+
+                if (BROADCAST_DELAY.ms) await new Promise((resolve) => setTimeout(resolve, BROADCAST_DELAY.ms));
+            }
+
+            await sendToUser(telegram, adminId, `✅ Розсилку завершено: доставлено ${delivered} з ${recipients.length}.`);
+        } finally {
+            broadcastInProgress = false;
+        }
+    });
 }
 
 export function registerAdminHandlers(bot: Telegraf) {
@@ -171,10 +223,55 @@ export function registerAdminHandlers(bot: Telegraf) {
     bot.action("admin_broadcast", async (ctx) => {
         if (ctx.from.id !== ADMIN_ID) return;
 
+        if (broadcastInProgress) {
+            await ctx.answerCbQuery("⏳ Попередня розсилка ще триває", { show_alert: true });
+            return;
+        }
+
         flowStore.set(ctx.from.id, newState("broadcast"));
 
         await ctx.answerCbQuery();
 
-        return ctx.reply("📢 Введіть текст розсилки:", stepKeyboard());
+        return ctx.reply(
+            "📢 Введіть текст розсилки. Перед відправкою я покажу, як вона виглядатиме, і попрошу підтвердити.",
+            stepKeyboard()
+        );
+    });
+
+    bot.action("broadcast_send", async (ctx) => {
+        if (ctx.from.id !== ADMIN_ID) return;
+
+        const state = flowStore.get(ctx.from.id);
+
+        // Чернетку прибираємо до старту — повторне натискання нічого не надішле вдруге.
+        flowStore.delete(ctx.from.id);
+        await removeButtons(ctx);
+
+        if (state?.flow !== "broadcast" || !state.draft) {
+            await ctx.answerCbQuery("Немає чернетки розсилки");
+            return;
+        }
+
+        if (broadcastInProgress) {
+            await ctx.answerCbQuery("⏳ Попередня розсилка ще триває", { show_alert: true });
+            return;
+        }
+
+        const total = broadcastRecipients().length;
+
+        await ctx.answerCbQuery("📤 Розсилку запущено");
+        await ctx.reply(`📤 Розсилку запущено для ${total} користувачів. Напишу, коли завершиться.`, mainMenu(ctx.from.id));
+
+        void startBroadcast(ctx.telegram, ctx.from.id, state.draft);
+    });
+
+    bot.action("broadcast_cancel", async (ctx) => {
+        if (ctx.from.id !== ADMIN_ID) return;
+
+        flowStore.delete(ctx.from.id);
+        await removeButtons(ctx);
+        await ctx.answerCbQuery();
+
+        return ctx.reply("❌ Розсилку скасовано.", mainMenu(ctx.from.id));
     });
 }

@@ -9,6 +9,7 @@ import { isBanned } from "../database/bans";
 import { getInteractedUserIds } from "../database/requests";
 import { getMatchedUserIds } from "../database/matches";
 import { getRecentlyHiddenIds } from "../database/hiddenProfiles";
+import { getReportedTargetIds } from "../database/reports";
 
 export interface SearchPrefs {
     games: string[];
@@ -88,7 +89,7 @@ export function isReachable(user: UserRecord, now = Date.now()): boolean {
 /**
  * ID анкет, які підходять під фільтри.
  * Не показуємо: себе, забанених, тих, з ким уже був запит чи матч,
- * нещодавно пропущених, неактивних і тих, хто заблокував бота,
+ * нещодавно пропущених, тих, на кого поскаржились, неактивних і тих, хто заблокував бота,
  * а також іншу вікову групу (діти/дорослі).
  * Порядок: спершу активні за останні RECENT_DAYS днів, усередині груп — випадково.
  */
@@ -99,7 +100,9 @@ export function findProfiles(searcher: UserRecord, prefs: SearchPrefs, now = Dat
         searcherId,
         ...getInteractedUserIds(searcherId),
         ...getMatchedUserIds(searcherId),
-        ...getRecentlyHiddenIds(searcherId, now - SKIP_HIDE_DAYS * DAY)
+        ...getRecentlyHiddenIds(searcherId, now - SKIP_HIDE_DAYS * DAY),
+        // Пропущені ховаються на SKIP_HIDE_DAYS, а ті, на кого поскаржились, — назавжди.
+        ...getReportedTargetIds(searcherId)
     ]);
 
     const gamesByUser = getAllUserGames();

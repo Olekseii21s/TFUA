@@ -5,7 +5,7 @@ import { flowStore, searchStore } from "./state";
 import { allowAction, LIMITS } from "./services/rateLimit";
 import { isBanned } from "./database/bans";
 import { logError } from "./logging";
-import { touchUser } from "./database/users";
+import { setBlockedBot, touchUser } from "./database/users";
 import { registerStartHandlers } from "./handlers/start";
 import { registerProfileHandlers } from "./handlers/profile";
 import { registerSearchHandlers } from "./handlers/search";
@@ -17,6 +17,18 @@ import { registerTextRouter } from "./handlers/text";
 /** Створює бота з усіма middleware та обробниками (без запуску). */
 export function createBot(token: string): Telegraf {
     const bot = new Telegraf(token);
+
+    // Службове оновлення від Telegram: людина заблокувала або розблокувала бота.
+    // Обробляється ПЕРШИМ і далі не йде: це не дія гравця, тож активність не оновлюємо
+    // (інакше той, хто щойно заблокував бота, виглядав би «свіжим» у пошуку).
+    bot.on("my_chat_member", (ctx) => {
+        if (ctx.chat.type !== "private") return;
+
+        const status = ctx.myChatMember.new_chat_member.status;
+
+        if (status === "kicked") setBlockedBot(ctx.from.id, true);
+        else if (status === "member") setBlockedBot(ctx.from.id, false);
+    });
 
     // Бан перевіряється для БУДЬ-якої дії: повідомлень, кнопок меню та inline-кнопок.
     bot.use(async (ctx, next) => {

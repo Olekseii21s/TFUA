@@ -4,9 +4,13 @@ import { Telegram } from "telegraf";
 import { createBot } from "../src/bot";
 import { LIMITS } from "../src/services/rateLimit";
 import { setDocumentUploader } from "../src/services/backup";
-import * as notifications from "../src/services/notifications";
+import { NOTIFY_DELAY } from "../src/services/notifications";
+import { BROADCAST_DELAY } from "../src/handlers/admin";
+import { waitForBackgroundJobs } from "../src/services/background";
 
-notifications.NOTIFY_DELAY.ms = 0;
+// Без пауз між повідомленнями — тести швидкі.
+NOTIFY_DELAY.ms = 0;
+BROADCAST_DELAY.ms = 0;
 
 export interface ApiCall {
     method: string;
@@ -58,7 +62,7 @@ export function createTestBot() {
 
     let updateId = 1;
 
-    // Після кожного апдейту чекаємо фонову розсилку сповіщень — щоб тести були детермінованими.
+    // Після кожного апдейту чекаємо фонові задачі (сповіщення, розсилку) — щоб тести були детермінованими.
     const send = async (from: TestUser, text: string) => {
         const isCommand = text.startsWith("/");
 
@@ -76,7 +80,7 @@ export function createTestBot() {
             }
         } as any);
 
-        await notifications.lastNotificationRun;
+        await waitForBackgroundJobs();
     };
 
     const press = async (from: TestUser, data: string) => {
@@ -91,7 +95,7 @@ export function createTestBot() {
             }
         } as any);
 
-        await notifications.lastNotificationRun;
+        await waitForBackgroundJobs();
     };
 
     const register = async (

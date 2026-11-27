@@ -12,3 +12,12 @@ export function addReport(reporterId: number, targetId: number, reason: string):
         VALUES (?, ?, ?, ?)
     `).run(reporterId, targetId, reason, Date.now());
 }
+
+/** На кого користувач уже скаржився — таких більше ніколи не показуємо йому в пошуку. */
+export function getReportedTargetIds(reporterId: number): number[] {
+    const rows = db.prepare(`
+        SELECT target_id FROM reports WHERE reporter_id = ?
+    `).all(reporterId) as { target_id: number }[];
+
+    return rows.map((row) => row.target_id);
+}

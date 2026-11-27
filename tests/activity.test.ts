@@ -81,6 +81,7 @@ test("хто заблокував бота — зникає з пошуку, а 
     blockedChats.add(weekOld.id);
     await press(admin, "admin_broadcast");
     await send(admin, "Оновлення бота!");
+    await press(admin, "broadcast_send");
     blockedChats.delete(weekOld.id);
 
     assert.equal(getUser(weekOld.id)!.blocked_bot, 1);

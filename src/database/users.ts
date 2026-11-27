@@ -97,9 +97,17 @@ export function touchUser(telegramId: number, username: string | undefined, now 
     touchStatement.run(username || "", now, telegramId);
 }
 
+/**
+ * Позначка «заблокував бота»: ставиться, коли Telegram відповів 403 або надіслав
+ * службове оновлення про блокування; знімається при розблокуванні чи будь-якій дії гравця.
+ */
+export function setBlockedBot(telegramId: number, blocked: boolean): void {
+    db.prepare(`UPDATE users SET blocked_bot = ? WHERE telegram_id = ?`).run(blocked ? 1 : 0, telegramId);
+}
+
 /** Telegram відповів 403 — гравець заблокував бота, у пошуку його більше не показуємо. */
 export function markBlockedBot(telegramId: number): void {
-    db.prepare(`UPDATE users SET blocked_bot = 1 WHERE telegram_id = ?`).run(telegramId);
+    setBlockedBot(telegramId, true);
 }
 
 export interface UserStats {

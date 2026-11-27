@@ -1,6 +1,5 @@
 import { Markup, Telegram } from "telegraf";
 import { sameAgeGroup } from "../domain/validation";
-import { logError } from "../logging";
 import { getAllSearchPreferences } from "../database/searchPreferences";
 import { getUser, UserRecord } from "../database/users";
 import { getUserGames } from "../database/userGames";
@@ -8,6 +7,7 @@ import { isBanned } from "../database/bans";
 import { getLastNotifiedAt, isNotifyEnabled, markNotified } from "../database/notifications";
 import { isReachable, matchesPrefs, parseSearchPrefs } from "./search";
 import { sendToUser } from "./delivery";
+import { runInBackground } from "./background";
 
 /** Не частіше одного сповіщення на 3 години на людину — щоб після реклами не було спаму. */
 export const NOTIFY_COOLDOWN_MS = 3 * 60 * 60 * 1000;
@@ -57,36 +57,24 @@ const notificationKeyboard = Markup.inlineKeyboard([
     [Markup.button.callback("🔕 Не надсилати такі сповіщення", "notify_off")]
 ]);
 
-/** Останнє запущене розсилання (тести чекають на нього). */
-export let lastNotificationRun: Promise<number> = Promise.resolve(0);
-
 /**
  * Повідомляє зацікавлених користувачів про нову анкету.
- * Запускається у фоні, щоб не затримувати відповідь новому гравцю.
- * Повертає кількість доставлених сповіщень.
+ * Працює у фоні, щоб не затримувати відповідь новому гравцю і не блокувати бота.
  */
-export function notifyAboutNewPlayer(telegram: Telegram, newPlayer: UserRecord): Promise<number> {
-    lastNotificationRun = (async () => {
-        if (isBanned(newPlayer.telegram_id)) return 0;
+export function notifyAboutNewPlayer(telegram: Telegram, newPlayer: UserRecord): Promise<void> {
+    return runInBackground("сповіщення про нового гравця", async () => {
+        if (isBanned(newPlayer.telegram_id)) return;
 
         const recipients = findUsersToNotify(newPlayer);
         const text = notificationText(newPlayer);
-        let delivered = 0;
 
         for (const recipientId of recipients) {
             // Відмічаємо одразу: навіть якщо людина заблокувала бота, не пробуємо знову щохвилини.
             markNotified(recipientId);
 
-            if (await sendToUser(telegram, recipientId, text, notificationKeyboard)) delivered++;
+            await sendToUser(telegram, recipientId, text, notificationKeyboard);
 
             if (NOTIFY_DELAY.ms) await new Promise((resolve) => setTimeout(resolve, NOTIFY_DELAY.ms));
         }
-
-        return delivered;
-    })().catch((err) => {
-        logError("❌ Помилка під час розсилки сповіщень про нового гравця:", err);
-        return 0;
     });
-
-    return lastNotificationRun;
 }

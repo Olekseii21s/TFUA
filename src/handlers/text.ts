@@ -29,7 +29,7 @@ export function registerTextRouter(bot: Telegraf) {
                 return handleReport(ctx, state, text);
 
             case "broadcast":
-                return handleBroadcast(ctx, ctx.message.text);
+                return handleBroadcast(ctx, state, ctx.message.text);
 
             case "register":
             case "editGames":
